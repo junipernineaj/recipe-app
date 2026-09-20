@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>{{ recipe["title"] }}</title>
+</head>
+<body>
+    <p><a href="/">&larr; Back to all recipes</a></p>
+    <h1>{{ recipe["title"] }}</h1>
+    <p><em>From: {{ recipe["source_book"] }}</em></p>
+
+    <h2>Ingredients</h2>
+    <ul>
+        {% for line in ingredients %}
+        <li>{{ line }}</li>
+        {% endfor %}
+    </ul>
+
+    <h2>Instructions</h2>
+    <ol>
+        {% for line in instructions %}
+        <li>{{ line }}</li>
+        {% endfor %}
+    </ol>
+</body>
+</html>
