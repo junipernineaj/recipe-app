@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Add a Recipe</title>
+</head>
+<body>
+    <p><a href="/">&larr; Back to all recipes</a></p>
+    <h1>Add a Recipe</h1>
+    <form action="/recipes" method="post">
+        <p><label>Title:<br><input type="text" name="title" required></label></p>
+        <p><label>Source book:<br><input type="text" name="source_book"></label></p>
+        <p><label>Ingredients (one per line):<br>
+            <textarea name="ingredients" rows="5" cols="40"></textarea></label></p>
+        <p><label>Instructions (one per line):<br>
+            <textarea name="instructions" rows="5" cols="40"></textarea></label></p>
+        <button type="submit">Save Recipe</button>
+    </form>
+</body>
+</html>

@@ -1,5 +1,6 @@
 import sqlite3
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Form
+from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 app = FastAPI()
@@ -29,6 +30,16 @@ def get_recipe_by_id(recipe_id: int):
     conn.close()
     return recipe
 
+def create_recipe(title, source_book, ingredients, instructions):
+    conn = sqlite3.connect("recipes.db")
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO recipes (title, source_book, ingredients, instructions) VALUES (?, ?, ?, ?)",
+        (title, source_book, ingredients, instructions)
+    )
+    conn.commit()
+    conn.close()
+
 @app.get("/")
 def read_root(request: Request):
     recipes = get_recipes()
@@ -42,6 +53,20 @@ def search(request: Request, q: str = ""):
     return templates.TemplateResponse(
         request=request, name="recipe_list.html", context={"recipes": recipes}
     )
+
+@app.get("/recipes/new")
+def new_recipe_form(request: Request):
+    return templates.TemplateResponse(request=request, name="new_recipe.html", context={})
+
+@app.post("/recipes")
+def add_recipe(
+    title: str = Form(...),
+    source_book: str = Form(""),
+    ingredients: str = Form(""),
+    instructions: str = Form(""),
+):
+    create_recipe(title, source_book, ingredients, instructions)
+    return RedirectResponse(url="/", status_code=303)
 
 @app.get("/recipes/{recipe_id}")
 def recipe_detail(request: Request, recipe_id: int):
