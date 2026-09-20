@@ -1,0 +1,5 @@
+<ul id="recipe-list">
+    {% for recipe in recipes %}
+    <li>{{ recipe["title"] }} — <em>{{ recipe["source_book"] }}</em></li>
+    {% endfor %}
+</ul>

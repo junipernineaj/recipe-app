@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>My Recipes</title>
+    <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+</head>
+<body>
+    <h1>My Recipes</h1>
+    <input type="search" name="q" placeholder="Search recipes..."
+           hx-get="/search"
+           hx-trigger="keyup changed delay:300ms, search"
+           hx-target="#recipe-list"
+           hx-swap="outerHTML">
+    {% include "recipe_list.html" %}
+</body>
+</html>
