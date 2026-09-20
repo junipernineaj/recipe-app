@@ -2,18 +2,27 @@
 <html>
 <head>
     <title>Add a Recipe</title>
+    <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-    <p><a href="/">&larr; Back to all recipes</a></p>
-    <h1>Add a Recipe</h1>
-    <form action="/recipes" method="post">
-        <p><label>Title:<br><input type="text" name="title" required></label></p>
-        <p><label>Source book:<br><input type="text" name="source_book"></label></p>
-        <p><label>Ingredients (one per line):<br>
-            <textarea name="ingredients" rows="5" cols="40"></textarea></label></p>
-        <p><label>Instructions (one per line):<br>
-            <textarea name="instructions" rows="5" cols="40"></textarea></label></p>
-        <button type="submit">Save Recipe</button>
-    </form>
+    <div class="container">
+        <a class="back-link" href="/">&larr; Back to all recipes</a>
+        <h1>Add a Recipe</h1>
+        <form action="/recipes" method="post">
+            <label>Title
+                <input type="text" name="title" required>
+            </label>
+            <label>Source book
+                <input type="text" name="source_book">
+            </label>
+            <label>Ingredients (one per line)
+                <textarea name="ingredients" rows="6"></textarea>
+            </label>
+            <label>Instructions (one per line)
+                <textarea name="instructions" rows="6"></textarea>
+            </label>
+            <button type="submit">Save Recipe</button>
+        </form>
+    </div>
 </body>
 </html>

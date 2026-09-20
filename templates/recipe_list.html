@@ -1,8 +1,12 @@
 <ul id="recipe-list">
     {% for recipe in recipes %}
     <li>
-        <a href="/recipes/{{ recipe['id'] }}">{{ recipe["title"] }}</a> — <em>{{ recipe["source_book"] }}</em>
+        <div class="recipe-info">
+            <a href="/recipes/{{ recipe['id'] }}">{{ recipe["title"] }}</a>
+            <span class="source">{{ recipe["source_book"] }}</span>
+        </div>
         <button
+            class="delete-btn"
             hx-delete="/recipes/{{ recipe['id'] }}"
             hx-target="closest li"
             hx-swap="outerHTML"
@@ -10,5 +14,7 @@
             Delete
         </button>
     </li>
+    {% else %}
+    <li class="empty-state">No recipes found.</li>
     {% endfor %}
 </ul>

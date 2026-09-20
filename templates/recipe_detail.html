@@ -2,24 +2,33 @@
 <html>
 <head>
     <title>{{ recipe["title"] }}</title>
+    <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-    <p><a href="/">&larr; Back to all recipes</a></p>
-    <h1>{{ recipe["title"] }}</h1>
-    <p><em>From: {{ recipe["source_book"] }}</em></p>
+    <div class="container">
+        <a class="back-link" href="/">&larr; Back to all recipes</a>
+        <div class="recipe-header">
+            <h1>{{ recipe["title"] }}</h1>
+            <p class="source">From: {{ recipe["source_book"] }}</p>
+        </div>
 
-    <h2>Ingredients</h2>
-    <ul>
-        {% for line in ingredients %}
-        <li>{{ line }}</li>
-        {% endfor %}
-    </ul>
+        <div class="recipe-section">
+            <h2>Ingredients</h2>
+            <ul>
+                {% for line in ingredients %}
+                <li>{{ line }}</li>
+                {% endfor %}
+            </ul>
+        </div>
 
-    <h2>Instructions</h2>
-    <ol>
-        {% for line in instructions %}
-        <li>{{ line }}</li>
-        {% endfor %}
-    </ol>
+        <div class="recipe-section">
+            <h2>Instructions</h2>
+            <ol>
+                {% for line in instructions %}
+                <li>{{ line }}</li>
+                {% endfor %}
+            </ol>
+        </div>
+    </div>
 </body>
 </html>
