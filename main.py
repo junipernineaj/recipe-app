@@ -1,7 +1,8 @@
-import sqlite3
-from fastapi import FastAPI, Request, Form
+from fastapi import FastAPI, Request, Form, Response
 from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
+import sqlite3
+
 
 app = FastAPI()
 templates = Jinja2Templates(directory="templates")
@@ -39,6 +40,15 @@ def create_recipe(title, source_book, ingredients, instructions):
     )
     conn.commit()
     conn.close()
+
+@app.delete("/recipes/{recipe_id}")
+def delete_recipe(recipe_id: int):
+    conn = sqlite3.connect("recipes.db")
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM recipes WHERE id = ?", (recipe_id,))
+    conn.commit()
+    conn.close()
+    return Response(status_code=200)
 
 @app.get("/")
 def read_root(request: Request):
