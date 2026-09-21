@@ -171,6 +171,7 @@ form button[type="submit"]:hover { background: #626c40; }
 
 .status-summary { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 1.25rem 0; }
 
+
 .status-badge {
     display: inline-block;
     padding: 0.3rem 0.7rem;
@@ -186,6 +187,8 @@ form button[type="submit"]:hover { background: #626c40; }
 .status-native_force_reocred { background: #cfe0b8; color: #3f5222; }
 .status-readable_native { background: #d8e4ea; color: #2c4a5c; }
 .status-unsupported_extension { background: #e6d9c3; color: #6f5847; }
+.status-ocr_done { background: #cfe0b8; color: #3f5222; }
+.status-compressed { background: #b8d4c8; color: #1f4a3a; }
 
 .books-table {
     width: 100%;

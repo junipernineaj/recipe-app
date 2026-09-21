@@ -52,29 +52,56 @@ def get_books(search_term: str = ""):
     conn = sqlite3.connect(INVENTORY_DB_PATH)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
+    base_query = """
+        SELECT * FROM (
+            SELECT
+                i.path, i.filename, i.size_bytes, i.scanned_at,
+                CASE
+                    WHEN i.status = 'unsupported_extension' THEN 'unsupported_extension'
+                    WHEN c.status = 'verified_ok' THEN 'compressed'
+                    WHEN o.ocr_status LIKE 'ocr_success%' THEN 'ocr_done'
+                    WHEN i.status = 'native_force_reocred' THEN 'ocr_done'
+                    WHEN i.status = 'readable_native' THEN 'readable_native'
+                    ELSE 'needs_ocr'
+                END AS status
+            FROM inventory i
+            LEFT JOIN ocr_results o ON i.path = o.path
+            LEFT JOIN compress_results c ON o.output_path = c.path
+        )
+        WHERE status != 'unsupported_extension'
+    """
     if search_term:
-        cursor.execute(
-            "SELECT path, filename, status, size_bytes, scanned_at FROM inventory "
-            "WHERE status != 'unsupported_extension' AND filename LIKE ? ORDER BY filename",
-            (f"%{search_term}%",)
-        )
+        cursor.execute(base_query + " AND filename LIKE ? ORDER BY filename", (f"%{search_term}%",))
     else:
-        cursor.execute(
-            "SELECT path, filename, status, size_bytes, scanned_at FROM inventory "
-            "WHERE status != 'unsupported_extension' ORDER BY filename"
-        )
+        cursor.execute(base_query + " ORDER BY filename")
     books = cursor.fetchall()
     conn.close()
     return books
 
+
 def get_book_status_counts():
     conn = sqlite3.connect(INVENTORY_DB_PATH)
     cursor = conn.cursor()
-    cursor.execute("SELECT status, COUNT(*) FROM inventory GROUP BY status ORDER BY COUNT(*) DESC")
+    cursor.execute("""
+        SELECT status, COUNT(*) FROM (
+            SELECT
+                CASE
+                    WHEN i.status = 'unsupported_extension' THEN 'unsupported_extension'
+                    WHEN c.status = 'verified_ok' THEN 'compressed'
+                    WHEN o.ocr_status LIKE 'ocr_success%' THEN 'ocr_done'
+                    WHEN i.status = 'native_force_reocred' THEN 'ocr_done'
+                    WHEN i.status = 'readable_native' THEN 'readable_native'
+                    ELSE 'needs_ocr'
+                END AS status
+            FROM inventory i
+            LEFT JOIN ocr_results o ON i.path = o.path
+            LEFT JOIN compress_results c ON o.output_path = c.path
+        )
+        GROUP BY status ORDER BY COUNT(*) DESC
+    """)
     counts = cursor.fetchall()
     conn.close()
     return counts
-
 
 @app.get("/")
 def read_root(request: Request):
