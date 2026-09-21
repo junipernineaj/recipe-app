@@ -4,6 +4,7 @@ from fastapi import FastAPI, Request, Form, Response
 from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import RedirectResponse, FileResponse
 
 app = FastAPI()
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -139,6 +140,38 @@ def books_search(request: Request, q: str = "", status: str = ""):
     return templates.TemplateResponse(
         request=request, name="books_list.html", context={"books": books}
     )
+
+@app.get("/books/view")
+def view_book(path: str):
+    conn = sqlite3.connect(INVENTORY_DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT
+            i.path AS original_path,
+            CASE WHEN o.ocr_status LIKE 'ocr_success%' OR i.status = 'native_force_reocred'
+                 THEN o.output_path ELSE NULL END AS ocr_output_path,
+            CASE WHEN c.status = 'verified_ok'
+                 THEN c.output_path ELSE NULL END AS compressed_path
+        FROM inventory i
+        LEFT JOIN ocr_results o ON i.path = o.path
+        LEFT JOIN compress_results c ON o.output_path = c.path
+        WHERE i.path = ?
+    """, (path,))
+    row = cursor.fetchone()
+    conn.close()
+
+    if row is None:
+        return Response(status_code=404, content="Book not found in database")
+
+    candidates = [row["compressed_path"], row["ocr_output_path"], row["original_path"]]
+    file_to_serve = next((p for p in candidates if p and os.path.exists(p)), None)
+
+    if file_to_serve is None:
+        return Response(status_code=404, content="File not found on disk (is the drive mounted?)")
+
+    return FileResponse(file_to_serve)
+
 
 @app.get("/recipes/new")
 def new_recipe_form(request: Request):

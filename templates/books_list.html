@@ -10,7 +10,7 @@
     <tbody>
         {% for book in books %}
         <tr>
-            <td>{{ book["filename"] }}</td>
+   	    <td><a href="/books/view?path={{ book['path'] | urlencode }}" target="_blank" rel="noopener">{{ book["filename"] }}</a></td>
             <td><span class="status-badge status-{{ book['status'] }}">{{ (book["status"] or "unknown").replace("_", " ") }}</span></td>
             <td>{{ "%.1f"|format(book["size_bytes"] / 1048576) if book["size_bytes"] else "—" }} MB</td>
             <td>{{ book["scanned_at"] or "—" }}</td>
