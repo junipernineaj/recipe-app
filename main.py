@@ -49,7 +49,7 @@ def create_recipe(title, source_book, ingredients, instructions):
     conn.commit()
     conn.close()
 
-def get_books(search_term: str = "", status_filter: str = ""):
+def get_books(search_term: str = "", status_filter: str = "", sort: str = "filename_asc"):
     conn = sqlite3.connect(INVENTORY_DB_PATH)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
@@ -80,7 +80,19 @@ def get_books(search_term: str = "", status_filter: str = ""):
     if search_term:
         base_query += " AND filename LIKE ?"
         params.append(f"%{search_term}%")
-    base_query += " ORDER BY filename"
+
+    sort_columns = {
+        "filename_asc": "filename ASC",
+        "filename_desc": "filename DESC",
+        "status_asc": "status ASC",
+        "status_desc": "status DESC",
+        "size_asc": "size_bytes ASC",
+        "size_desc": "size_bytes DESC",
+        "scanned_at_asc": "scanned_at ASC",
+        "scanned_at_desc": "scanned_at DESC",
+    }
+    base_query += " ORDER BY " + sort_columns.get(sort, "filename ASC")
+
     cursor.execute(base_query, params)
     books = cursor.fetchall()
     conn.close()
@@ -125,20 +137,19 @@ def search(request: Request, q: str = ""):
         request=request, name="recipe_list.html", context={"recipes": recipes}
     )
 
-
 @app.get("/books")
-def books_page(request: Request):
-    books = get_books()
+def books_page(request: Request, sort: str = "filename_asc"):
+    books = get_books(sort=sort)
     counts = get_book_status_counts()
     return templates.TemplateResponse(
-        request=request, name="books.html", context={"books": books, "counts": counts}
+        request=request, name="books.html", context={"books": books, "counts": counts, "sort": sort}
     )
 
 @app.get("/books/search")
-def books_search(request: Request, q: str = "", status: str = ""):
-    books = get_books(search_term=q, status_filter=status)
+def books_search(request: Request, q: str = "", status: str = "", sort: str = "filename_asc"):
+    books = get_books(search_term=q, status_filter=status, sort=sort)
     return templates.TemplateResponse(
-        request=request, name="books_list.html", context={"books": books}
+        request=request, name="books_list.html", context={"books": books, "sort": sort}
     )
 
 @app.get("/books/view")

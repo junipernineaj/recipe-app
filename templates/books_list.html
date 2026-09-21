@@ -1,16 +1,21 @@
+{% macro sort_th(column, label) %}
+{% set next_sort = column ~ '_desc' if sort == column ~ '_asc' else column ~ '_asc' %}
+<th><a href="/books?sort={{ next_sort }}">{{ label }}{% if sort == column ~ '_asc' %} ▲{% elif sort == column ~ '_desc' %} ▼{% endif %}</a></th>
+{% endmacro %}
+
 <table id="books-list" class="books-table">
     <thead>
         <tr>
-            <th>Filename</th>
-            <th>Status</th>
-            <th>Size</th>
-            <th>Scanned</th>
+            {{ sort_th('filename', 'Filename') }}
+            {{ sort_th('status', 'Status') }}
+            {{ sort_th('size', 'Size') }}
+            {{ sort_th('scanned_at', 'Scanned') }}
         </tr>
     </thead>
     <tbody>
         {% for book in books %}
         <tr>
-   	    <td><a href="/books/view?path={{ book['path'] | urlencode }}" target="_blank" rel="noopener">{{ book["filename"] }}</a></td>
+            <td><a href="/books/view?path={{ book['path'] | urlencode }}" target="_blank" rel="noopener">{{ book["filename"] }}</a></td>
             <td><span class="status-badge status-{{ book['status'] }}">{{ (book["status"] or "unknown").replace("_", " ") }}</span></td>
             <td>{{ "%.1f"|format(book["size_bytes"] / 1048576) if book["size_bytes"] else "—" }} MB</td>
             <td>{{ book["scanned_at"] or "—" }}</td>
