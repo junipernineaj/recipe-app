@@ -216,3 +216,20 @@ form button[type="submit"]:hover { background: #626c40; }
 }
 
 .books-table tr:last-child td { border-bottom: none; }
+
+.status-badge {
+    border: none;
+    cursor: pointer;
+    font-family: inherit;
+    transition: opacity 0.15s ease;
+}
+
+.status-badge:hover {
+    opacity: 0.8;
+}
+
+.status-clear {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--brown-mid);
+}

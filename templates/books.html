@@ -2,7 +2,7 @@
 <html>
 <head>
     <title>My Cookbook Library</title>
-    <link rel="stylesheet" href="/static/style.css?v=3">
+    <link rel="stylesheet" href="/static/style.css?v=4">
     <script src="https://unpkg.com/htmx.org@1.9.12"></script>
 </head>
 <body>
@@ -14,11 +14,23 @@
 
         <a class="back-link" href="/">&larr; Back to recipes</a>
 
-        <div class="status-summary">
-            {% for status, count in counts %}
-            <span class="status-badge status-{{ status }}">{{ status.replace("_", " ") }}: {{ count }}</span>
-            {% endfor %}
-        </div>
+<div class="status-summary">
+    {% for status, count in counts %}
+    <button type="button" class="status-badge status-{{ status }}"
+            hx-get="/books/search"
+            hx-vals='{"status": "{{ status }}"}'
+            hx-target="#books-list"
+            hx-swap="outerHTML">
+        {{ status.replace("_", " ") }}: {{ count }}
+    </button>
+    {% endfor %}
+    <button type="button" class="status-badge status-clear"
+            hx-get="/books/search"
+            hx-target="#books-list"
+            hx-swap="outerHTML">
+        Show all
+    </button>
+</div>
 
         <input type="search" name="q" class="search-input" placeholder="Search books by filename..."
                hx-get="/books/search"

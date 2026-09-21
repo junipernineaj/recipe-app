@@ -48,7 +48,7 @@ def create_recipe(title, source_book, ingredients, instructions):
     conn.commit()
     conn.close()
 
-def get_books(search_term: str = ""):
+def get_books(search_term: str = "", status_filter: str = ""):
     conn = sqlite3.connect(INVENTORY_DB_PATH)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
@@ -68,16 +68,22 @@ def get_books(search_term: str = ""):
             LEFT JOIN ocr_results o ON i.path = o.path
             LEFT JOIN compress_results c ON o.output_path = c.path
         )
-        WHERE status != 'unsupported_extension'
+        WHERE 1=1
     """
-    if search_term:
-        cursor.execute(base_query + " AND filename LIKE ? ORDER BY filename", (f"%{search_term}%",))
+    params = []
+    if status_filter:
+        base_query += " AND status = ?"
+        params.append(status_filter)
     else:
-        cursor.execute(base_query + " ORDER BY filename")
+        base_query += " AND status != 'unsupported_extension'"
+    if search_term:
+        base_query += " AND filename LIKE ?"
+        params.append(f"%{search_term}%")
+    base_query += " ORDER BY filename"
+    cursor.execute(base_query, params)
     books = cursor.fetchall()
     conn.close()
     return books
-
 
 def get_book_status_counts():
     conn = sqlite3.connect(INVENTORY_DB_PATH)
@@ -127,14 +133,12 @@ def books_page(request: Request):
         request=request, name="books.html", context={"books": books, "counts": counts}
     )
 
-
 @app.get("/books/search")
-def books_search(request: Request, q: str = ""):
-    books = get_books(q)
+def books_search(request: Request, q: str = "", status: str = ""):
+    books = get_books(search_term=q, status_filter=status)
     return templates.TemplateResponse(
         request=request, name="books_list.html", context={"books": books}
     )
-
 
 @app.get("/recipes/new")
 def new_recipe_form(request: Request):
