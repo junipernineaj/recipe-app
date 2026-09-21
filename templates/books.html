@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>My Cookbook Library</title>
+    <link rel="stylesheet" href="/static/style.css?v=2">
+    <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+</head>
+<body>
+    <div class="container">
+        <div class="site-header">
+            <h1>📚 My Cookbook Library</h1>
+            <p class="tagline">Every book's journey, from scan to searchable recipes</p>
+        </div>
+
+        <a class="back-link" href="/">&larr; Back to recipes</a>
+
+        <div class="status-summary">
+            {% for status, count in counts %}
+            <span class="status-badge status-{{ status }}">{{ status.replace("_", " ") }}: {{ count }}</span>
+            {% endfor %}
+        </div>
+
+        <input type="search" name="q" class="search-input" placeholder="Search books by filename..."
+               hx-get="/books/search"
+               hx-trigger="keyup changed delay:300ms, search"
+               hx-target="#books-list"
+               hx-swap="outerHTML"
+               style="margin-bottom: 1.5rem; width: 100%;">
+
+        {% include "books_list.html" %}
+    </div>
+</body>
+</html>

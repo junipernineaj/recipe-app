@@ -166,3 +166,50 @@ form button[type="submit"]:hover { background: #626c40; }
     #recipe-list li { flex-direction: column; align-items: flex-start; }
     .delete-btn { align-self: flex-end; }
 }
+
+.site-nav { text-align: center; margin-bottom: 1.5rem; }
+
+.status-summary { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 1.25rem 0; }
+
+.status-badge {
+    display: inline-block;
+    padding: 0.3rem 0.7rem;
+    border-radius: 999px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    background: var(--border);
+    color: var(--brown-dark);
+    text-transform: capitalize;
+}
+
+.status-needs_ocr { background: #f3d9a4; color: #6b4a00; }
+.status-native_force_reocred { background: #cfe0b8; color: #3f5222; }
+.status-readable_native { background: #d8e4ea; color: #2c4a5c; }
+.status-unsupported_extension { background: #e6d9c3; color: #6f5847; }
+
+.books-table {
+    width: 100%;
+    border-collapse: collapse;
+    background: var(--cream-card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+    box-shadow: var(--shadow);
+}
+
+.books-table th, .books-table td {
+    text-align: left;
+    padding: 0.6rem 0.9rem;
+    border-bottom: 1px solid var(--border);
+    font-size: 0.9rem;
+}
+
+.books-table th {
+    background: var(--cream);
+    color: var(--brown-mid);
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+
+.books-table tr:last-child td { border-bottom: none; }
