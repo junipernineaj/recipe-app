@@ -49,14 +49,19 @@ def create_recipe(title, source_book, ingredients, instructions):
     conn.commit()
     conn.close()
 
-def get_books(search_term: str = "", status_filter: str = "", sort: str = "filename_asc"):
+def get_books(search_term: str = "", status_filter: str = "", sort: str = "filename_asc", show_hidden: bool = False):
     conn = sqlite3.connect(INVENTORY_DB_PATH)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
     base_query = """
         SELECT * FROM (
             SELECT
-                i.path, i.filename, i.size_bytes, i.scanned_at,
+                i.path, i.filename, i.size_bytes, i.excluded,
+                MAX(
+                    COALESCE(i.scanned_at, ''),
+                    COALESCE(o.completed_at, ''),
+                    COALESCE(c.completed_at, '')
+                ) AS last_updated,
                 CASE
                     WHEN i.status = 'unsupported_extension' THEN 'unsupported_extension'
                     WHEN c.status = 'verified_ok' THEN 'compressed'
@@ -72,6 +77,8 @@ def get_books(search_term: str = "", status_filter: str = "", sort: str = "filen
         WHERE 1=1
     """
     params = []
+    if not show_hidden:
+        base_query += " AND excluded = 0"
     if status_filter:
         base_query += " AND status = ?"
         params.append(status_filter)
@@ -88,8 +95,8 @@ def get_books(search_term: str = "", status_filter: str = "", sort: str = "filen
         "status_desc": "status DESC",
         "size_asc": "size_bytes ASC",
         "size_desc": "size_bytes DESC",
-        "scanned_at_asc": "scanned_at ASC",
-        "scanned_at_desc": "scanned_at DESC",
+        "scanned_at_asc": "last_updated ASC",
+        "scanned_at_desc": "last_updated DESC",
     }
     base_query += " ORDER BY " + sort_columns.get(sort, "filename ASC")
 
@@ -98,12 +105,13 @@ def get_books(search_term: str = "", status_filter: str = "", sort: str = "filen
     conn.close()
     return books
 
-def get_book_status_counts():
+def get_book_status_counts(show_hidden: bool = False):
     conn = sqlite3.connect(INVENTORY_DB_PATH)
     cursor = conn.cursor()
-    cursor.execute("""
+    query = """
         SELECT status, COUNT(*) FROM (
             SELECT
+                i.excluded,
                 CASE
                     WHEN i.status = 'unsupported_extension' THEN 'unsupported_extension'
                     WHEN c.status = 'verified_ok' THEN 'compressed'
@@ -116,8 +124,11 @@ def get_book_status_counts():
             LEFT JOIN ocr_results o ON i.path = o.path
             LEFT JOIN compress_results c ON o.output_path = c.path
         )
-        GROUP BY status ORDER BY COUNT(*) DESC
-    """)
+    """
+    if not show_hidden:
+        query += " WHERE excluded = 0"
+    query += " GROUP BY status ORDER BY COUNT(*) DESC"
+    cursor.execute(query)
     counts = cursor.fetchall()
     conn.close()
     return counts
@@ -138,19 +149,29 @@ def search(request: Request, q: str = ""):
     )
 
 @app.get("/books")
-def books_page(request: Request, sort: str = "filename_asc"):
-    books = get_books(sort=sort)
-    counts = get_book_status_counts()
+def books_page(request: Request, sort: str = "filename_asc", show_hidden: bool = False):
+    books = get_books(sort=sort, show_hidden=show_hidden)
+    counts = get_book_status_counts(show_hidden=show_hidden)
     return templates.TemplateResponse(
-        request=request, name="books.html", context={"books": books, "counts": counts, "sort": sort}
+        request=request, name="books.html",
+        context={"books": books, "counts": counts, "sort": sort, "show_hidden": show_hidden}
     )
 
 @app.get("/books/search")
-def books_search(request: Request, q: str = "", status: str = "", sort: str = "filename_asc"):
-    books = get_books(search_term=q, status_filter=status, sort=sort)
+def books_search(request: Request, q: str = "", status: str = "", sort: str = "filename_asc", show_hidden: bool = False):
+    books = get_books(search_term=q, status_filter=status, sort=sort, show_hidden=show_hidden)
     return templates.TemplateResponse(
-        request=request, name="books_list.html", context={"books": books, "sort": sort}
+        request=request, name="books_list.html",
+        context={"books": books, "sort": sort, "show_hidden": show_hidden}
     )
+
+@app.post("/books/exclude")
+def exclude_book(path: str = Form(...)):
+    conn = sqlite3.connect(INVENTORY_DB_PATH)
+    conn.execute("UPDATE inventory SET excluded = 1 WHERE path = ?", (path,))
+    conn.commit()
+    conn.close()
+    return Response(status_code=200)
 
 @app.get("/books/view")
 def view_book(path: str):

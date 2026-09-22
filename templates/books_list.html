@@ -9,7 +9,8 @@
             {{ sort_th('filename', 'Filename') }}
             {{ sort_th('status', 'Status') }}
             {{ sort_th('size', 'Size') }}
-            {{ sort_th('scanned_at', 'Scanned') }}
+            {{ sort_th('scanned_at', 'Last updated') }}
+            <th></th>
         </tr>
     </thead>
     <tbody>
@@ -18,10 +19,20 @@
             <td><a href="/books/view?path={{ book['path'] | urlencode }}" target="_blank" rel="noopener">{{ book["filename"] }}</a></td>
             <td><span class="status-badge status-{{ book['status'] }}">{{ (book["status"] or "unknown").replace("_", " ") }}</span></td>
             <td>{{ "%.1f"|format(book["size_bytes"] / 1048576) if book["size_bytes"] else "—" }} MB</td>
-            <td>{{ book["scanned_at"] or "—" }}</td>
+            <td>{{ book["last_updated"] or "—" }}</td>
+            <td>
+                <button type="button" class="exclude-btn"
+                        hx-post="/books/exclude"
+                        hx-vals='{"path": {{ book["path"] | tojson }} }'
+                        hx-target="closest tr"
+                        hx-swap="delete"
+                        hx-confirm="Mark &quot;{{ book['filename'] }}&quot; as not a cookbook? It'll disappear from this list and be skipped during OCR/compression.">
+                    Not a cookbook
+                </button>
+            </td>
         </tr>
         {% else %}
-        <tr><td colspan="4" class="empty-state">No books found.</td></tr>
+        <tr><td colspan="5" class="empty-state">No books found.</td></tr>
         {% endfor %}
     </tbody>
 </table>
