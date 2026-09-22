@@ -122,18 +122,20 @@ def verify_text(pdf_path: Path):
     avg = total_chars / page_count if page_count else 0
     return page_count, total_chars, avg, None
 
-
-def run_ocrmypdf(input_path: Path, output_path: Path, lang: str, jobs: int, clean: bool, timeout: int):
+def run_ocrmypdf(input_path: Path, output_path: Path, lang: str, jobs: int, clean: bool, timeout: int,
+                  force_ocr: bool = False, rotate_pages_threshold: float = None):
     output_path.parent.mkdir(parents=True, exist_ok=True)
     cmd = [
         "ocrmypdf",
-        "--skip-text",       # don't touch pages that already have usable text
+        "--force-ocr" if force_ocr else "--skip-text",
         "--deskew",
         "--rotate-pages",
         "--language", lang,
         "--jobs", str(jobs),
         "--output-type", "pdf",
     ]
+    if rotate_pages_threshold is not None:
+        cmd += ["--rotate-pages-threshold", str(rotate_pages_threshold)]
     if clean:
         cmd.append("--clean")
     cmd += [str(input_path), str(output_path)]
@@ -163,6 +165,12 @@ def main():
     ap.add_argument("--timeout", type=int, default=2400, help="per-file timeout in seconds (default: 2400 = 40 min)")
     ap.add_argument("--limit", type=int, default=0, help="only process the first N files (dry run)")
     ap.add_argument("--resume", action="store_true", help="skip files already recorded in ocr_results")
+    ap.add_argument("--force-ocr", action="store_true",
+                     help="discard any existing text layer and re-OCR from scratch")
+    ap.add_argument("--rotate-pages-threshold", type=float, default=None,
+                     help="confidence threshold for --rotate-pages auto-orientation")
+    ap.add_argument("--file-list", default=None,
+                     help="path to a text file of absolute file paths (one per line) to process directly")
     args = ap.parse_args()
 
     if not OCRMYPDF_AVAILABLE:
@@ -180,9 +188,26 @@ def main():
     conn = sqlite3.connect(args.db)
     init_results_table(conn)
 
-    cur = conn.execute("SELECT path, extension FROM inventory WHERE status = 'needs_ocr' AND excluded = 0 ORDER BY path")
-    rows = cur.fetchall()
-    print(f"Found {len(rows)} files marked needs_ocr in {args.db}")
+    if args.file_list:
+        list_path = Path(args.file_list).expanduser()
+        if not list_path.exists():
+            print(f"ERROR: file list not found: {list_path}", file=sys.stderr)
+            sys.exit(1)
+        rows = []
+        for line in list_path.read_text().splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            p = Path(line).expanduser().resolve()
+            if not p.exists():
+                print(f"WARNING: listed file not found, skipping: {p}", file=sys.stderr)
+                continue
+            rows.append((str(p), p.suffix.lower()))
+        print(f"Loaded {len(rows)} file(s) from {list_path}")
+    else:
+        cur = conn.execute("SELECT path, extension FROM inventory WHERE status = 'needs_ocr' AND excluded = 0 ORDER BY path")
+        rows = cur.fetchall()
+        print(f"Found {len(rows)} files marked needs_ocr in {args.db}")
 
     if args.limit:
         rows = rows[: args.limit]
@@ -216,7 +241,10 @@ def main():
         output_path = output_dir / rel
 
         t0 = time.time()
-        ok, err = run_ocrmypdf(input_path, output_path, args.lang, args.jobs, args.clean, args.timeout)
+        ok, err = run_ocrmypdf(
+            input_path, output_path, args.lang, args.jobs, args.clean, args.timeout,
+            force_ocr=args.force_ocr, rotate_pages_threshold=args.rotate_pages_threshold,
+        )
         duration = time.time() - t0
 
         if not ok:
