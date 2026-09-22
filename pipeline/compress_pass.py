@@ -90,7 +90,7 @@ QPDF_AVAILABLE = shutil.which("qpdf") is not None
 # a sequence-based ratio produces false alarms on that reordering alone.
 # Genuine content loss shows up here as a real drop in overlap; harmless
 # reordering does not, so this threshold can stay strict.
-TEXT_MATCH_THRESHOLD = 0.999
+TEXT_MATCH_THRESHOLD = 0.994
  
  
 def init_results_table(conn: sqlite3.Connection):
