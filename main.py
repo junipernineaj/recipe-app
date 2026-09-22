@@ -56,7 +56,11 @@ def get_books(search_term: str = "", status_filter: str = "", sort: str = "filen
     base_query = """
         SELECT * FROM (
             SELECT
-                i.path, i.filename, i.size_bytes, i.excluded,
+                i.path, i.filename, i.excluded,
+                CASE
+                    WHEN c.status = 'verified_ok' THEN c.compressed_bytes
+                    ELSE i.size_bytes
+                END AS size_bytes,
                 MAX(
                     COALESCE(i.scanned_at, ''),
                     COALESCE(o.completed_at, ''),
