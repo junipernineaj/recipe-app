@@ -122,6 +122,18 @@ def already_done(conn, path_str):
     )
     return cur.fetchone() is not None
  
+def get_excluded_filenames(conn):
+    """Filenames (not full paths -- the OCR output directory has moved once
+    already, so matching by directory prefix isn't reliable) whose original
+    inventory row has been flagged excluded ("not a cookbook")."""
+    cur = conn.execute(
+        """
+        SELECT o.output_path FROM ocr_results o
+        JOIN inventory i ON i.path = o.path
+        WHERE i.excluded = 1 AND o.output_path IS NOT NULL
+        """
+    )
+    return {Path(row[0]).name for row in cur.fetchall() if row[0]}
  
 def record_result(conn, path_str, output_path, status, orig_bytes, comp_bytes,
                    pct_saved, text_ratio, duration, err):
@@ -402,11 +414,18 @@ def main():
     else:
         pdf_paths = sorted(source.rglob("*.pdf"))
         print(f"Found {len(pdf_paths)} PDF(s) under {source}")
- 
+
+    excluded_names = get_excluded_filenames(conn)
+    if excluded_names:
+        before = len(pdf_paths)
+        pdf_paths = [p for p in pdf_paths if p.name not in excluded_names]
+        skipped = before - len(pdf_paths)
+        if skipped:
+            print(f"Skipping {skipped} file(s) flagged excluded (not a cookbook) in inventory")
+
     if args.limit:
         pdf_paths = pdf_paths[: args.limit]
-        print(f"--limit set: only processing first {len(pdf_paths)}")
- 
+        print(f"--limit set: only processing first {len(pdf_paths)}") 
     stats = {"verified_ok": 0, "text_mismatch": 0, "compressed_unverified": 0, "failed": 0, "skipped": 0}
  
     for input_path in tqdm(pdf_paths, desc="Compress", unit="file"):

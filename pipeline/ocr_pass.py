@@ -180,7 +180,7 @@ def main():
     conn = sqlite3.connect(args.db)
     init_results_table(conn)
 
-    cur = conn.execute("SELECT path, extension FROM inventory WHERE status = 'needs_ocr' ORDER BY path")
+    cur = conn.execute("SELECT path, extension FROM inventory WHERE status = 'needs_ocr' AND excluded = 0 ORDER BY path")
     rows = cur.fetchall()
     print(f"Found {len(rows)} files marked needs_ocr in {args.db}")
 
