@@ -20,16 +20,6 @@
             <td><span class="status-badge status-{{ book['status'] }}">{{ (book["status"] or "unknown").replace("_", " ") }}</span></td>
             <td>{{ "%.1f"|format(book["size_bytes"] / 1048576) if book["size_bytes"] else "—" }} MB</td>
             <td>{{ book["last_updated"] or "—" }}</td>
-            <td>
-                <button type="button" class="exclude-btn"
-                        hx-post="/books/exclude"
-                        hx-vals='{"path": {{ book["path"] | tojson }} }'
-                        hx-target="closest tr"
-                        hx-swap="delete"
-                        hx-confirm="Mark &quot;{{ book['filename'] }}&quot; as not a cookbook? It'll disappear from this list and be skipped during OCR/compression.">
-                    Not a cookbook
-                </button>
-            </td>
         </tr>
         {% else %}
         <tr><td colspan="5" class="empty-state">No books found.</td></tr>
