@@ -202,20 +202,28 @@ def main():
             if not p.exists():
                 print(f"WARNING: listed file not found, skipping: {p}", file=sys.stderr)
                 continue
-            rows.append((str(p), p.suffix.lower()))
+            rows.append((str(p), p.suffix.lower(), None))
         print(f"Loaded {len(rows)} file(s) from {list_path}")
     else:
-        cur = conn.execute("SELECT path, extension FROM inventory WHERE status = 'needs_ocr' AND excluded = 0 ORDER BY path")
+        cur = conn.execute(
+            "SELECT path, extension, status FROM inventory "
+            "WHERE status IN ('needs_ocr', 'native_force_reocred') AND excluded = 0 ORDER BY path"
+        )
         rows = cur.fetchall()
-        print(f"Found {len(rows)} files marked needs_ocr in {args.db}")
+        n_needs = sum(1 for _, _, s in rows if s == 'needs_ocr')
+        n_force = sum(1 for _, _, s in rows if s == 'native_force_reocred')
+        print(f"Found {len(rows)} files to process in {args.db} ({n_needs} needs_ocr, {n_force} native_force_reocred)")
 
     if args.limit:
         rows = rows[: args.limit]
         print(f"--limit set: only processing first {len(rows)}")
 
     pdf_rows, non_pdf_rows = [], []
-    for path_str, ext in rows:
-        (pdf_rows if ext == ".pdf" else non_pdf_rows).append(path_str)
+    for path_str, ext, status in rows:
+        if ext == ".pdf":
+            pdf_rows.append((path_str, status))
+        else:
+            non_pdf_rows.append(path_str)
 
     if non_pdf_rows:
         print(f"{len(non_pdf_rows)} needs_ocr file(s) aren't PDFs -- ocrmypdf can't handle those, recording as skipped_not_pdf")
@@ -228,7 +236,7 @@ def main():
     stats = {"ocr_success_verified": 0, "ocr_ran_low_text": 0, "failed": 0, "skipped": 0}
 
     since_commit = 0
-    for path_str in tqdm(pdf_rows, desc="OCR", unit="file"):
+    for path_str, row_status in tqdm(pdf_rows, desc="OCR", unit="file"):
         if args.resume and already_done(conn, path_str):
             stats["skipped"] += 1
             continue
@@ -240,10 +248,12 @@ def main():
             rel = Path(input_path.name)
         output_path = output_dir / rel
 
+        force_this = args.force_ocr or (row_status == "native_force_reocred")
+
         t0 = time.time()
         ok, err = run_ocrmypdf(
             input_path, output_path, args.lang, args.jobs, args.clean, args.timeout,
-            force_ocr=args.force_ocr, rotate_pages_threshold=args.rotate_pages_threshold,
+            force_ocr=force_this, rotate_pages_threshold=args.rotate_pages_threshold,
         )
         duration = time.time() - t0
 
