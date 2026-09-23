@@ -1,0 +1,250 @@
+# Cookbook Digitization & Recipe App — Architecture & Familiarisation
+
+This doc is the "where does everything live and how does it fit together"
+reference for this repo. It covers two things that share one database:
+
+1. **The pipeline** (`pipeline/*.py`) — turns a folder of scanned cookbook
+   PDFs into OCR'd, compressed, searchable copies.
+2. **The web app** (`main.py`, `templates/`) — a FastAPI + HTMX site that
+   browses the resulting library and (eventually) individual recipes.
+
+If you only remember one thing from this page, remember the three-folder
+rule in the next section — it's the thing that's caused the most confusion
+so far.
+
+## The three storage locations (read this first)
+
+All three live on the external drive, `/media/aj9/Juniper13/`. They are
+**not** interchangeable, and each has exactly one job:
+
+| Folder | Role | Kept forever? |
+|---|---|---|
+| `Books/Cookbooks/` | **Holding pen.** Where new scans land before processing. Once a file's OCR'd copy is safely in `cookbook_ocr_output`, the original here is no longer needed for anything the pipeline does. | No — it's an inbox, not an archive. |
+| `cookbook_ocr_output/` | **The permanent archive.** Once OCR'd, a book's full-size, searchable-text copy lives here for good, regardless of size. This is the canonical "original" going forward. | **Yes, always.** |
+| `cookbook_ocr_compressed/` | **The serving copies.** Smaller, re-compressed versions of the OCR'd files, generated from `cookbook_ocr_output`. This is what the app actually links to day-to-day. | Yes, but regenerable from `cookbook_ocr_output` if ever lost. |
+
+Rule of thumb: **new files go into `Books/Cookbooks`, nothing gets deleted
+from `cookbook_ocr_output`.** If disk space ever needs freeing up, the
+candidate is `Books/Cookbooks` (once a file's OCR'd copy is confirmed safe),
+never the OCR archive.
+
+## The database
+
+One SQLite file, shared by the pipeline and the app:
+
+```
+~/cookbook-project/inventory.sqlite
+```
+
+**Always use the full absolute path to this file.** SQLite silently
+*creates* a new empty database if you point it at a path that doesn't
+exist yet (a relative `--db inventory.sqlite` run from the wrong directory
+has bitten us more than once) — it never errors, it just quietly starts
+you off with a blank DB.
+
+Three tables:
+
+- **`inventory`** — one row per file found under the holding pen.
+  `path` (original file location) is the primary key. Key columns:
+  `status` (`readable_native` / `readable_via_calibre` / `needs_ocr` /
+  `encrypted` / `unsupported` / `error` / `unsupported_extension`),
+  `size_bytes`, `excluded` (1 = flagged "not a cookbook", hidden from the
+  app and skipped by OCR/compress).
+- **`ocr_results`** — one row per file OCR'd. `path` matches
+  `inventory.path`. `output_path` points into `cookbook_ocr_output`.
+  `ocr_status` is `ocr_success_verified` / `ocr_ran_low_text` / `failed` /
+  `skipped_not_pdf`.
+- **`compress_results`** — one row per file compressed. `path` here is the
+  **OCR output path** (i.e. matches `ocr_results.output_path`, not the
+  original `inventory.path`). `output_path` points into
+  `cookbook_ocr_compressed`. `status` is `verified_ok` / `text_mismatch` /
+  `compressed_unverified` / `failed`.
+
+Because `compress_results.path` keys off the OCR output path rather than
+the original, moving/renaming files in `cookbook_ocr_output` without
+updating `ocr_results.output_path` breaks the join between the two tables
+— the app will fall back to serving an older/uncompressed copy silently
+rather than erroring. If a book that should show as "compressed" doesn't,
+check for exactly this kind of stale pointer first.
+
+## Two separate venvs — don't mix them up
+
+This project has **two different Python virtual environments** on
+junipernine2, and running a script with the wrong one produces confusing
+`ModuleNotFoundError`s:
+
+- **`~/recipe-app/venv`** — for the web app. Activate this before running
+  `uvicorn main:app`.
+- **`~/cookbook-project/venv`** — for the pipeline scripts. Activate this
+  before running anything in `pipeline/`.
+
+Also make sure you `cd` into the right directory first — `uvicorn` needs
+to be run from `~/recipe-app` (so it can find `main.py`), and the pipeline
+scripts should be run from `~/recipe-app/pipeline`.
+
+## The pipeline, stage by stage
+
+All three scripts are in `pipeline/` and are **safe to re-run** — pass
+`--resume` and each one skips anything already recorded as done (a prior
+*failure* still gets retried automatically; only a genuine success is
+skipped).
+
+### Stage 1 — `cookbook_inventory.py` (classify what's in the holding pen)
+
+```
+python3 cookbook_inventory.py --source /media/aj9/Juniper13/Books/Cookbooks \
+    --db ~/cookbook-project/inventory.sqlite --csv ~/cookbook-project/inventory.csv --resume
+```
+
+Walks the holding pen, tries to extract text from every file (PDF, EPUB,
+DOCX, RTF, TXT natively; mobi/azw/djvu/etc. via Calibre if installed), and
+classifies each one. This is the step that decides whether a file needs
+OCR at all.
+
+### Stage 2 — `ocr_pass.py` (bake in searchable text)
+
+```
+python3 ocr_pass.py --db ~/cookbook-project/inventory.sqlite \
+    --source /media/aj9/Juniper13/Books/Cookbooks \
+    --output-dir /media/aj9/Juniper13/cookbook_ocr_output --resume
+```
+
+Runs `ocrmypdf` over everything Stage 1 marked `needs_ocr`, then
+independently re-extracts text from the result to verify OCR actually
+worked (rather than trusting `ocrmypdf`'s exit code). Originals are never
+touched — output always goes to `cookbook_ocr_output`.
+
+Useful flags beyond the basics:
+- `--file-list <path>` — process an explicit list of file paths (one per
+  line) instead of querying the DB. Use this for a targeted fix without
+  touching the rest of the library.
+- `--force-ocr` — discard any existing text layer and redo OCR from
+  scratch. Needed when re-processing a file whose first OCR pass was bad
+  (e.g. wrong orientation) — the default `--skip-text` mode leaves pages
+  that already have *any* text layer alone, which would preserve the bad
+  result.
+- `--rotate-pages-threshold <N>` — lowers the confidence bar for
+  `--rotate-pages`'s automatic per-page orientation correction (default
+  ocrmypdf threshold is 14; we've used `2` successfully for batches of
+  inconsistently-oriented scans, e.g. mixed-orientation recipe cards).
+- `--timeout <seconds>` — default 2400 (40 min). Large/dense books
+  (400+ pages, or a combined multi-volume PDF) can need much longer —
+  we've used up to 7200s (2hr) for oversized single-file volumes.
+
+**Known gap:** a small number of files fail with
+`DecompressionBombError` (an embedded image with an absurd pixel count —
+seen on a 576-page book with one wildly over-scanned image). `ocrmypdf`
+has a `--max-image-mpixels` flag for exactly this, but it isn't wired
+into `ocr_pass.py`'s CLI yet — that's a pending code change, not yet done.
+
+### Stage 3 — `compress_pass.py` (shrink while preserving searchable text)
+
+```
+python3 compress_pass.py --db ~/cookbook-project/inventory.sqlite \
+    --source /media/aj9/Juniper13/cookbook_ocr_output \
+    --output-dir /media/aj9/Juniper13/cookbook_ocr_compressed --resume
+```
+
+Re-compresses images via Ghostscript (text objects pass through
+untouched, so the OCR layer survives), then verifies success by
+extracting text from before/after and comparing similarity
+(`TEXT_MATCH_THRESHOLD`, currently `0.994` — relaxed down from an
+originally-too-strict `0.999` after observing that genuine OCR/recompression
+noise routinely lands in the 0.997–0.999 range; anything meaningfully
+below that, e.g. ~0.98, is worth an actual manual look rather than assumed
+noise).
+
+Useful flags:
+- `--file` / `--file-list` — target specific files directly, bypassing
+  the normal `--source` directory scan. Essential for natively-readable
+  PDFs that never went through OCR (and so never land under
+  `cookbook_ocr_output`'s scan), or for re-verifying one specific fix.
+- `--color-dpi` / `--gray-dpi` / `--mono-dpi` — compression targets
+  (defaults 200/200/300).
+
+### `weekly_refresh.sh` — chaining all three
+
+`pipeline/weekly_refresh.sh` runs all three stages back to back with
+`--resume`, logs to `weekly_refresh.log`, and prints a pass/fail summary.
+**It currently has `CHANGE_ME` placeholders for `SOURCE_DIR`,
+`OCR_OUTPUT_DIR`, and `COMPRESSED_OUTPUT_DIR`** and needs those filled in
+with the real paths above before it's actually usable — it also predates
+the pipeline scripts moving into this repo, so double check its `cd`
+target and venv path match `~/recipe-app/pipeline` and
+`~/cookbook-project/venv` before relying on it.
+
+## Diagnosing a stuck/broken file
+
+When something in this pipeline fails, this is roughly the order that's
+worked:
+
+1. **Get the real error**, not just the status. `ocr_results` and
+   `compress_results` both store an `error_message` column — query it
+   directly rather than guessing from the summary counts.
+2. **Check the original with `qpdf --check`** before assuming the OCR
+   output is broken — several "corrupt file" scares turned out to be a
+   perfectly healthy original with the *OCR output* corrupted (usually
+   from a timeout cutting `ocrmypdf` off mid-write). `qpdf --check` on the
+   OCR'd copy vs. the original tells you which side actually has the
+   problem.
+3. **Isolate before re-running the whole book.** For a crash on a specific
+   page (say page 268 of a 600-page book), extract just that page range
+   with `qpdf --pages <file> <file> N-M -- test.pdf` and run `ocrmypdf`
+   directly against the small slice with `--verbose 1`, piped to a log
+   file. This turns a 10-40 minute wait-and-guess into a few seconds, and
+   gives you the full untruncated error (our scripts only store the last
+   1500 characters of `ocrmypdf`'s output in the DB, which can cut off the
+   actual traceback).
+4. A crash that reproduces identically on an isolated slice but *not* on
+   a supposedly-different "clean" replacement copy is a sign the
+   replacement isn't actually different content — worth an `md5sum`
+   comparison before spending more time on it.
+
+## The "not a cookbook" exclusion mechanism
+
+`inventory.excluded` (0/1) lets a file stay physically on disk while being
+hidden from the app and skipped by every pipeline stage. The backend is
+fully wired up:
+
+- `main.py`'s queries filter `AND excluded = 0` unless `show_hidden=true`
+  is passed.
+- `POST /books/exclude` (form param `path`) sets the flag.
+- `ocr_pass.py`'s inventory query and `compress_pass.py`'s file-discovery
+  both skip excluded paths.
+
+**The "Not a cookbook" button is currently removed from the UI**
+(`templates/books_list.html`) to avoid other viewers of the shared
+`/books` page accidentally hiding files — it was pulled purely from the
+template, not the backend, so it can be re-added any time by restoring
+the button markup; nothing else needs to change.
+
+## The web app
+
+- `main.py` connects directly to `~/cookbook-project/inventory.sqlite` —
+  there is no separate app-side copy of book data.
+- `/books` and `/books/search` show the library; sortable by filename,
+  status, size, last-updated.
+- `/books/view?path=...` serves the actual file, falling back in this
+  order: **compressed copy (only if `verified_ok`) → OCR'd copy → raw
+  original.** This fallback is why a file can silently serve a lower-
+  quality version without erroring — if something's not showing the
+  version you expect, this is the order to check.
+- Deployed behind a Cloudflare Tunnel (`cloudflared`, systemd service) at
+  `recipes.junipernine.com`, gated by Cloudflare Access. See
+  `documentation/recipe-app-cloudflare-setup.pdf` for the original setup
+  steps.
+- Run with: `cd ~/recipe-app && source venv/bin/activate && uvicorn
+  main:app --reload --host 0.0.0.0 --port 8000`
+
+## Phase 2 (not started): recipe extraction
+
+Longer-term, individual recipes get extracted out of these digitized
+books into the `recipes` table/UI that already exists for manual entry.
+Not yet designed — flagged here so future-you remembers it's the next
+big phase, not forgotten scope.
+
+A separate, smaller idea logged for that phase: many filenames are messy
+(e.g. `...toOCR` suffixes) and shouldn't be used as the display title for
+extracted recipes. The plan agreed on was a `clean_title` column on
+`inventory` (a display alias) rather than renaming files on disk, since
+`inventory.path` is a primary key joined across tables.
