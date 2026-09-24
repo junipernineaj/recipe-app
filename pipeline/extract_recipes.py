@@ -295,6 +295,29 @@ def call_claude(client, model, chunk_text, retries=2):
     return [], total_in_tok, total_out_tok
 
 
+def looks_like_index_chunk(recipes: list) -> bool:
+    """Deterministic backstop for a failure mode the extraction prompt's
+    "skip alphabetical indexes/glossaries" instruction doesn't reliably
+    catch on its own -- confirmed in practice on 2026-09-24, where
+    qwen3:14b returned 147 "recipes" from a 15-page chunk that was purely
+    a back-of-book index, despite that exact instruction being right there
+    in the prompt. A chunk that returns an unusually large number of
+    recipe-shaped things, almost all of which have no real ingredients or
+    instructions, is far more likely to be an index/glossary/reference
+    list than that many genuinely complete recipes crammed into one
+    chunk -- so treat it as one and discard the whole batch, rather than
+    inserting dozens of content-free stubs a human would then have to
+    reject one at a time in the review queue."""
+    if len(recipes) < 8:
+        return False
+    blank_count = sum(
+        1 for r in recipes
+        if not [l for l in r.get("ingredients", []) if l and l.strip()]
+        or not [l for l in r.get("instructions", []) if l and l.strip()]
+    )
+    return (blank_count / len(recipes)) >= 0.6
+
+
 def insert_recipe(conn, recipe, book_title, source_path, page_start, page_end, engine="claude-api"):
     # The JSON schema only enforces that ingredients/instructions are
     # present, not that they contain anything real -- a model can satisfy
@@ -378,6 +401,11 @@ def main():
             continue
 
         recipes, in_tok, out_tok = call_claude(client, args.model, chunk_text)
+        if looks_like_index_chunk(recipes):
+            print(f"NOTE: chunk {chunk_index} (pages {page_start}-{page_end}) looks like an "
+                  f"index/glossary ({len(recipes)} items, mostly blank) -- skipping rather "
+                  f"than inserting as recipes", file=sys.stderr)
+            recipes = []
         for recipe in recipes:
             insert_recipe(conn, recipe, args.book_title, source_path, page_start, page_end)
 

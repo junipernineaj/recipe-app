@@ -54,6 +54,7 @@ from extract_recipes import (
     chunk_pages,
     init_db,
     insert_recipe,
+    looks_like_index_chunk,
     pdftotext_pages,
 )
 
@@ -217,6 +218,11 @@ def main():
             continue
 
         recipes, prompt_tok, eval_tok = call_ollama(args.ollama_host, args.model, chunk_text)
+        if looks_like_index_chunk(recipes):
+            print(f"NOTE: chunk {chunk_index} (pages {page_start}-{page_end}) looks like an "
+                  f"index/glossary ({len(recipes)} items, mostly blank) -- skipping rather "
+                  f"than inserting as recipes", file=sys.stderr)
+            recipes = []
         for recipe in recipes:
             insert_recipe(conn, recipe, args.book_title, source_path, page_start, page_end, engine=engine)
 
