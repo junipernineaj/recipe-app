@@ -19,11 +19,11 @@ def get_recipes(search_term: str = ""):
     cursor = conn.cursor()
     if search_term:
         cursor.execute(
-            "SELECT id, title, source_book FROM recipes WHERE title LIKE ?",
+            "SELECT id, title, source_book FROM recipes WHERE status = 'approved' AND title LIKE ?",
             (f"%{search_term}%",)
         )
     else:
-        cursor.execute("SELECT id, title, source_book FROM recipes")
+        cursor.execute("SELECT id, title, source_book FROM recipes WHERE status = 'approved'")
     recipes = cursor.fetchall()
     conn.close()
     return recipes
@@ -37,6 +37,21 @@ def get_recipe_by_id(recipe_id: int):
     recipe = cursor.fetchone()
     conn.close()
     return recipe
+
+
+def get_pending_recipes():
+    conn = sqlite3.connect("recipes.db")
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT id, title, source_book, engine, flagged_for_review
+        FROM recipes
+        WHERE status != 'approved'
+        ORDER BY source_book, id
+    """)
+    recipes = cursor.fetchall()
+    conn.close()
+    return recipes
 
 
 def create_recipe(title, source_book, ingredients, instructions):
@@ -152,6 +167,13 @@ def search(request: Request, q: str = ""):
         request=request, name="recipe_list.html", context={"recipes": recipes}
     )
 
+@app.get("/review")
+def review_page(request: Request):
+    recipes = get_pending_recipes()
+    return templates.TemplateResponse(
+        request=request, name="review.html", context={"recipes": recipes}
+    )
+
 @app.get("/books")
 def books_page(request: Request, sort: str = "filename_asc", show_hidden: bool = False):
     books = get_books(sort=sort, show_hidden=show_hidden)
@@ -235,6 +257,15 @@ def recipe_detail(request: Request, recipe_id: int):
         name="recipe_detail.html",
         context={"recipe": recipe, "ingredients": ingredients, "instructions": instructions}
     )
+
+
+@app.post("/recipes/{recipe_id}/approve")
+def approve_recipe(recipe_id: int):
+    conn = sqlite3.connect("recipes.db")
+    conn.execute("UPDATE recipes SET status = 'approved' WHERE id = ?", (recipe_id,))
+    conn.commit()
+    conn.close()
+    return RedirectResponse(url="/review", status_code=303)
 
 
 @app.delete("/recipes/{recipe_id}")

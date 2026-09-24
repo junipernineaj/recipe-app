@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Review Queue - My Recipes</title>
+    <link rel="stylesheet" href="/static/style.css?v=4">
+    <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+</head>
+<body>
+    <div class="container">
+        <div class="site-header">
+<div class="site-nav">
+    <a href="/">🍳 Back to recipes</a>
+    <a href="/books">📚 View book library</a>
+</div>
+            <h1>🔍 Review Queue</h1>
+            <p class="tagline">Pending extractions -- approve to make them visible on the main site</p>
+        </div>
+
+        {% include "review_list.html" %}
+    </div>
+</body>
+</html>

@@ -1,0 +1,23 @@
+<ul id="review-list">
+    {% for recipe in recipes %}
+    <li>
+        <div class="recipe-info">
+            <a href="/recipes/{{ recipe['id'] }}">{{ recipe["title"] }}</a>
+            <span class="source">{{ recipe["source_book"] }}{% if recipe["engine"] %} &middot; {{ recipe["engine"] }}{% endif %}</span>
+            {% if recipe["flagged_for_review"] %}
+            <p class="flag-note">&#9888; {{ recipe["flagged_for_review"] }}</p>
+            {% endif %}
+        </div>
+        <button
+            class="delete-btn"
+            hx-delete="/recipes/{{ recipe['id'] }}"
+            hx-target="closest li"
+            hx-swap="outerHTML"
+            hx-confirm="Reject and delete '{{ recipe['title'] }}'? This can't be undone.">
+            Reject
+        </button>
+    </li>
+    {% else %}
+    <li class="empty-state">Nothing waiting for review. 🎉</li>
+    {% endfor %}
+</ul>
