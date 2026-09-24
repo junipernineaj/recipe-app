@@ -2,7 +2,7 @@
 <html>
 <head>
     <title>{{ recipe["title"] }}</title>
-    <link rel="stylesheet" href="/static/style.css?v=4">
+    <link rel="stylesheet" href="/static/style.css?v=5">
 </head>
 <body>
     <div class="container">
@@ -47,6 +47,57 @@
                 <li>{{ line }}</li>
                 {% endfor %}
             </ol>
+        </div>
+
+        <div class="recipe-section">
+            <h2>Made it? Rate it.</h2>
+            {% if user_email %}
+            <form method="post" action="/recipes/{{ recipe['id'] }}/review">
+                <label>
+                    <input type="checkbox" name="made_it" {% if my_review and my_review["made_it"] %}checked{% endif %}>
+                    I've made this
+                </label>
+                <label>
+                    Rating
+                    <select name="rating">
+                        <option value="">No rating</option>
+                        {% for n in range(1, 6) %}
+                        <option value="{{ n }}" {% if my_review and my_review["rating"] == n %}selected{% endif %}>
+                            {{ ('&#9733;' * n) | safe }}{{ ('&#9734;' * (5 - n)) | safe }}
+                        </option>
+                        {% endfor %}
+                    </select>
+                </label>
+                <label>
+                    Notes
+                    <textarea name="review_text" rows="3" placeholder="How did it turn out? Any tweaks you made?">{{ my_review["review_text"] if my_review and my_review["review_text"] else "" }}</textarea>
+                </label>
+                <button type="submit">Save</button>
+            </form>
+            {% else %}
+            <p class="muted">Couldn't identify you -- reviews need to come through Cloudflare Access.</p>
+            {% endif %}
+
+            {% if reviews %}
+            {% if made_it_count or avg_rating %}
+            <p class="review-summary">
+                {% if made_it_count %}{{ made_it_count }} of {{ reviews|length }} who reviewed made this{% endif %}
+                {% if avg_rating %} &middot; average rating {{ avg_rating }}/5{% endif %}
+            </p>
+            {% endif %}
+            <ul class="review-list">
+                {% for r in reviews %}
+                <li>
+                    <strong>{{ r["user_email"].split("@")[0]|capitalize }}</strong>
+                    {% if r["made_it"] %}&#10003; made this{% endif %}
+                    {% if r["rating"] %} &middot; {{ ('&#9733;' * r["rating"]) | safe }}{{ ('&#9734;' * (5 - r["rating"])) | safe }}{% endif %}
+                    {% if r["review_text"] %}<p>{{ r["review_text"] }}</p>{% endif %}
+                </li>
+                {% endfor %}
+            </ul>
+            {% else %}
+            <p class="muted">No one's reviewed this yet -- be the first!</p>
+            {% endif %}
         </div>
     </div>
 </body>

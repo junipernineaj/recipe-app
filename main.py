@@ -45,6 +45,37 @@ def require_admin(request: Request):
         raise HTTPException(status_code=403, detail="Admins only")
 
 
+def current_user_email(request: Request) -> str | None:
+    """The verified email Cloudflare Access attaches to every request (see
+    the comment on ADMIN_EMAILS above for the trust model), or None if it's
+    missing. Unlike is_admin(), this doesn't gate anything -- every visitor
+    who reaches the site gets one -- it's just how we attribute a "made it"
+    tick or a review to a real person without building our own login."""
+    email = (request.headers.get("Cf-Access-Authenticated-User-Email") or "").strip().lower()
+    return email or None
+
+
+def init_recipe_reviews_table():
+    conn = sqlite3.connect("recipes.db")
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS recipe_reviews (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            recipe_id INTEGER NOT NULL,
+            user_email TEXT NOT NULL,
+            made_it INTEGER NOT NULL DEFAULT 0,
+            rating INTEGER,
+            review_text TEXT,
+            updated_at TEXT NOT NULL,
+            UNIQUE(recipe_id, user_email)
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+
+init_recipe_reviews_table()
+
+
 def get_recipes(search_term: str = ""):
     conn = sqlite3.connect("recipes.db")
     conn.row_factory = sqlite3.Row
@@ -117,6 +148,49 @@ def update_recipe(recipe_id, title, servings, prep_time, cook_time, ingredients,
     ))
     conn.commit()
     conn.close()
+
+def get_reviews_for_recipe(recipe_id: int):
+    conn = sqlite3.connect("recipes.db")
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT user_email, made_it, rating, review_text, updated_at
+        FROM recipe_reviews
+        WHERE recipe_id = ?
+        ORDER BY updated_at DESC
+    """, (recipe_id,))
+    reviews = cursor.fetchall()
+    conn.close()
+    return reviews
+
+
+def get_user_review(recipe_id: int, user_email: str):
+    conn = sqlite3.connect("recipes.db")
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT made_it, rating, review_text FROM recipe_reviews WHERE recipe_id = ? AND user_email = ?",
+        (recipe_id, user_email),
+    )
+    review = cursor.fetchone()
+    conn.close()
+    return review
+
+
+def upsert_review(recipe_id: int, user_email: str, made_it: bool, rating: int | None, review_text: str | None):
+    conn = sqlite3.connect("recipes.db")
+    conn.execute("""
+        INSERT INTO recipe_reviews (recipe_id, user_email, made_it, rating, review_text, updated_at)
+        VALUES (?, ?, ?, ?, ?, datetime('now'))
+        ON CONFLICT(recipe_id, user_email) DO UPDATE SET
+            made_it = excluded.made_it,
+            rating = excluded.rating,
+            review_text = excluded.review_text,
+            updated_at = excluded.updated_at
+    """, (recipe_id, user_email, int(made_it), rating, review_text))
+    conn.commit()
+    conn.close()
+
 
 def get_books(search_term: str = "", status_filter: str = "", sort: str = "filename_asc", show_hidden: bool = False):
     conn = sqlite3.connect(INVENTORY_DB_PATH)
@@ -310,11 +384,54 @@ def recipe_detail(request: Request, recipe_id: int):
         raise HTTPException(status_code=403, detail="This recipe hasn't been approved yet")
     ingredients = recipe["ingredients"].split("\n")
     instructions = recipe["instructions"].split("\n")
+
+    user_email = current_user_email(request)
+    reviews = get_reviews_for_recipe(recipe_id)
+    my_review = get_user_review(recipe_id, user_email) if user_email else None
+    made_it_count = sum(1 for r in reviews if r["made_it"])
+    rated = [r["rating"] for r in reviews if r["rating"]]
+    avg_rating = round(sum(rated) / len(rated), 1) if rated else None
+
     return templates.TemplateResponse(
         request=request,
         name="recipe_detail.html",
-        context={"recipe": recipe, "ingredients": ingredients, "instructions": instructions, "is_admin": admin}
+        context={
+            "recipe": recipe, "ingredients": ingredients, "instructions": instructions, "is_admin": admin,
+            "user_email": user_email, "reviews": reviews, "my_review": my_review,
+            "made_it_count": made_it_count, "avg_rating": avg_rating,
+        }
     )
+
+
+@app.post("/recipes/{recipe_id}/review")
+def submit_review(
+    request: Request,
+    recipe_id: int,
+    made_it: str = Form(""),
+    rating: str = Form(""),
+    review_text: str = Form(""),
+):
+    recipe = get_recipe_by_id(recipe_id)
+    if recipe is None:
+        return Response(status_code=404, content="Recipe not found")
+    if recipe["status"] != "approved" and not is_admin(request):
+        raise HTTPException(status_code=403, detail="This recipe hasn't been approved yet")
+
+    user_email = current_user_email(request)
+    if not user_email:
+        # Shouldn't normally happen -- Cloudflare Access authenticates every
+        # visitor before they get this far -- but fail loudly rather than
+        # silently attributing the review to nobody.
+        raise HTTPException(status_code=400, detail="Couldn't identify who you are -- are you accessing this through Cloudflare Access?")
+
+    rating_int = None
+    if rating.strip().isdigit():
+        candidate = int(rating.strip())
+        if 1 <= candidate <= 5:
+            rating_int = candidate
+
+    upsert_review(recipe_id, user_email, made_it == "on", rating_int, review_text.strip() or None)
+    return RedirectResponse(url=f"/recipes/{recipe_id}", status_code=303)
 
 
 @app.get("/recipes/{recipe_id}/source")

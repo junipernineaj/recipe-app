@@ -335,6 +335,37 @@ How it works:
   actual security boundary, which is the server-side `require_admin`
   check.
 
+## Recipe reviews ("made it" / ratings)
+
+As of 2026-09-24, anyone who can view an approved recipe can tick "I've
+made this", leave a 1-5 rating, and leave a free-text note -- visible to
+everyone else who can see that recipe (this is a 3-person family site, so
+attribution is the point, not a privacy concern).
+
+How it works:
+
+- Reuses the same `Cf-Access-Authenticated-User-Email` header as admin
+  access (see "Admin access control" above), but for a different purpose:
+  `current_user_email(request)` just reads it to attribute a review to a
+  real person, and does **not** gate anything -- every visitor who reaches
+  the site gets one, not just admins. There's no separate login for this.
+- One row per `(recipe_id, user_email)` in a new `recipe_reviews` table
+  (`recipes.db`, created automatically on startup if missing --
+  `init_recipe_reviews_table()` in `main.py`). Re-submitting the form
+  updates your existing row rather than adding a new one, so there's no
+  history of past ratings, just your current one.
+- `POST /recipes/{id}/review` writes it; `GET /recipes/{id}` reads all
+  reviews for that recipe plus your own (pre-fills the form) and computes
+  a simple "N of M made this" / average-rating summary.
+- Same visibility rule as the recipe itself: reviewing (or viewing others'
+  reviews on) an unapproved recipe still requires admin, via the same
+  `recipe["status"] != "approved"` check used elsewhere.
+- If `current_user_email(request)` comes back `None` (no header at all),
+  the review form doesn't render -- this would only happen if the app were
+  reached some way that bypasses Cloudflare Access, which per "Admin
+  access control" above is only a real possibility from the home LAN
+  directly, not from the public URL.
+
 ## Phase 2 (not started): recipe extraction
 
 Longer-term, individual recipes get extracted out of these digitized
