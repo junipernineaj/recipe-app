@@ -28,6 +28,25 @@ from `cookbook_ocr_output`.** If disk space ever needs freeing up, the
 candidate is `Books/Cookbooks` (once a file's OCR'd copy is confirmed safe),
 never the OCR archive.
 
+**Only clear a file out of `Books/Cookbooks` once it shows up as `Readable
+Native`, `Ocr Done`, or `Compressed`** in the app or in `inventory.status` /
+`ocr_results`. A file that's still `Needs Ocr` (never actually OCR'd yet)
+has no record anywhere else — moving or deleting it before it's processed
+loses it for good, ghost-row cleanup or not.
+
+On 2026-09-24, clearing out `Books/Cookbooks` wholesale (rather than file by
+file, once done) exposed a real bug: `cookbook_inventory.py`'s scan never
+checked whether a previously-recorded file still existed on disk, so
+`inventory` accumulated rows for files long gone from the holding pen. Those
+"ghost rows" first showed as an inflated Needs OCR count on the dashboard
+(433 instead of 2); a first attempt at cleaning them up via a one-off
+`DELETE` script actually deleted the `inventory` row for ~667 already-
+compressed books outright, which silently dropped them from *every*
+dashboard count instead of showing their real status. Both issues are now
+fixed and covered by `--prune` below, but it's why the rule above is worth
+actually following rather than just clearing the whole folder whenever
+convenient.
+
 ## The database
 
 One SQLite file, shared by the pipeline and the app:
@@ -100,6 +119,32 @@ Walks the holding pen, tries to extract text from every file (PDF, EPUB,
 DOCX, RTF, TXT natively; mobi/azw/djvu/etc. via Calibre if installed), and
 classifies each one. This is the step that decides whether a file needs
 OCR at all.
+
+Useful flags:
+- `--resume` — skip anything already recorded in `inventory` (a prior
+  `error` status still gets retried; only a real success is skipped).
+- `--prune` — before scanning, remove `inventory` rows for files that have
+  disappeared from `--source` *and* were never actually processed (no OCR
+  history, no resolved status like `readable_native`). Anything with real
+  processing history is protected regardless of where its file currently
+  lives, so this never touches a done book. Requires `--archive-dir`
+  (repeatable) to confirm a same-named copy actually exists somewhere
+  before deleting anything; without it, missing files are only reported,
+  never deleted.
+- `--prune-only` — run just the prune step and print the summary, skip the
+  scan entirely. **Run this (not `--prune`) first after a big clear-out**
+  and check the Protected/Removed/Warning counts before trusting a real
+  `--prune` run.
+
+Typical prune, after processed books have been moved out of the holding pen:
+
+
+```
+python3 cookbook_inventory.py --source /media/aj9/Juniper13/Books/Cookbooks \
+    --db ~/cookbook-project/inventory.sqlite --prune-only \
+    --archive-dir /media/aj9/Juniper13/cookbook_ocr_output \
+    --archive-dir /media/aj9/Juniper13/cookbook_ocr_compressed
+```
 
 ### Stage 2 — `ocr_pass.py` (bake in searchable text)
 
