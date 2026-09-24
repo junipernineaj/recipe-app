@@ -6,3 +6,5 @@ __pycache__/
 recipes.db
 /media/aj9/Juniper13/cookbook_ocr_compressed
 /media/aj9/Juniper13/cookbook_ocr_output
+*.sqlite
+*.log
