@@ -64,6 +64,28 @@ def create_recipe(title, source_book, ingredients, instructions):
     conn.commit()
     conn.close()
 
+
+def update_recipe(recipe_id, title, servings, prep_time, cook_time, ingredients, instructions, notes, flagged_for_review):
+    conn = sqlite3.connect("recipes.db")
+    conn.execute("""
+        UPDATE recipes
+        SET title = ?, servings = ?, prep_time = ?, cook_time = ?,
+            ingredients = ?, instructions = ?, notes = ?, flagged_for_review = ?
+        WHERE id = ?
+    """, (
+        title,
+        servings or None,
+        prep_time or None,
+        cook_time or None,
+        ingredients,
+        instructions,
+        notes or None,
+        flagged_for_review or None,
+        recipe_id,
+    ))
+    conn.commit()
+    conn.close()
+
 def get_books(search_term: str = "", status_filter: str = "", sort: str = "filename_asc", show_hidden: bool = False):
     conn = sqlite3.connect(INVENTORY_DB_PATH)
     conn.row_factory = sqlite3.Row
@@ -257,6 +279,30 @@ def recipe_detail(request: Request, recipe_id: int):
         name="recipe_detail.html",
         context={"recipe": recipe, "ingredients": ingredients, "instructions": instructions}
     )
+
+
+@app.get("/recipes/{recipe_id}/edit")
+def edit_recipe_form(request: Request, recipe_id: int):
+    recipe = get_recipe_by_id(recipe_id)
+    return templates.TemplateResponse(
+        request=request, name="recipe_edit.html", context={"recipe": recipe}
+    )
+
+
+@app.post("/recipes/{recipe_id}/edit")
+def edit_recipe(
+    recipe_id: int,
+    title: str = Form(...),
+    servings: str = Form(""),
+    prep_time: str = Form(""),
+    cook_time: str = Form(""),
+    ingredients: str = Form(""),
+    instructions: str = Form(""),
+    notes: str = Form(""),
+    flagged_for_review: str = Form(""),
+):
+    update_recipe(recipe_id, title, servings, prep_time, cook_time, ingredients, instructions, notes, flagged_for_review)
+    return RedirectResponse(url=f"/recipes/{recipe_id}", status_code=303)
 
 
 @app.post("/recipes/{recipe_id}/approve")

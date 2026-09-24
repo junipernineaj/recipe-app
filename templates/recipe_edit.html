@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Edit {{ recipe["title"] }}</title>
+    <link rel="stylesheet" href="/static/style.css?v=4">
+</head>
+<body>
+    <div class="container">
+        <a class="back-link" href="/recipes/{{ recipe['id'] }}">&larr; Back to recipe</a>
+        <h1>Edit Recipe</h1>
+        <form action="/recipes/{{ recipe['id'] }}/edit" method="post">
+            <label>Title
+                <input type="text" name="title" value="{{ recipe['title'] }}" required>
+            </label>
+            <label>Servings
+                <input type="text" name="servings" value="{{ recipe['servings'] or '' }}">
+            </label>
+            <label>Prep time
+                <input type="text" name="prep_time" value="{{ recipe['prep_time'] or '' }}">
+            </label>
+            <label>Cook time
+                <input type="text" name="cook_time" value="{{ recipe['cook_time'] or '' }}">
+            </label>
+            <label>Ingredients (one per line)
+                <textarea name="ingredients" rows="10">{{ recipe["ingredients"] }}</textarea>
+            </label>
+            <label>Instructions (one per line)
+                <textarea name="instructions" rows="10">{{ recipe["instructions"] }}</textarea>
+            </label>
+            <label>Notes (one per line)
+                <textarea name="notes" rows="4">{{ recipe["notes"] or '' }}</textarea>
+            </label>
+            <label>Flagged for review (clear this once you've fixed the issue it's describing)
+                <textarea name="flagged_for_review" rows="3">{{ recipe["flagged_for_review"] or '' }}</textarea>
+            </label>
+            <button type="submit">Save Changes</button>
+        </form>
+    </div>
+</body>
+</html>
