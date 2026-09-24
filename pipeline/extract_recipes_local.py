@@ -106,6 +106,14 @@ def call_ollama(host, model, chunk_text, retries=2):
                     "model": model,
                     "messages": [{"role": "user", "content": prompt}],
                     "stream": False,
+                    # Qwen3 (and other "thinking" models like DeepSeek-R1) reason
+                    # internally before answering by default. Left on, that
+                    # reasoning eats into num_predict before the model ever
+                    # writes the JSON, which risks the same kind of truncation
+                    # we hit with qwen2.5's runaway generation -- just for a
+                    # different underlying reason. Harmless no-op for models
+                    # that don't support thinking (qwen2.5 included).
+                    "think": False,
                     "format": RECIPE_RESPONSE_SCHEMA,
                     "options": {
                         "temperature": 0.2,
