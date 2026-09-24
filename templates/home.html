@@ -10,14 +10,18 @@
         <div class="site-header">
 <div class="site-nav">
     <a href="/books">📚 View book library</a>
+    {% if is_admin %}
     <a href="/review">🔍 Review queue</a>
+    {% endif %}
 </div>
             <h1>🍳 My Recipes</h1>
             <p class="tagline">A home for the recipes worth keeping</p>
         </div>
 
         <div class="actions-row">
+            {% if is_admin %}
             <a href="/recipes/new" class="btn">+ Add a recipe</a>
+            {% endif %}
             <input type="search" name="q" class="search-input" placeholder="Search recipes..."
                    hx-get="/search"
                    hx-trigger="keyup changed delay:300ms, search"

@@ -257,11 +257,12 @@ fully wired up:
 - `ocr_pass.py`'s inventory query and `compress_pass.py`'s file-discovery
   both skip excluded paths.
 
-**The "Not a cookbook" button is currently removed from the UI**
+**The "Not a cookbook" button was originally removed from the UI**
 (`templates/books_list.html`) to avoid other viewers of the shared
-`/books` page accidentally hiding files — it was pulled purely from the
-template, not the backend, so it can be re-added any time by restoring
-the button markup; nothing else needs to change.
+`/books` page accidentally hiding files. As of 2026-09-24 it's back, but
+gated behind `require_admin` (see "Admin access control" below) — so the
+underlying concern is now handled by the admin check rather than by
+leaving the feature unbuilt.
 
 ## The web app
 
@@ -278,8 +279,61 @@ the button markup; nothing else needs to change.
   `recipes.junipernine.com`, gated by Cloudflare Access. See
   `documentation/recipe-app-cloudflare-setup.pdf` for the original setup
   steps.
-- Run with: `cd ~/recipe-app && source venv/bin/activate && uvicorn
-  main:app --reload --host 0.0.0.0 --port 8000`
+- Run with (see "Admin access control" below for `ADMIN_EMAILS`):
+  `export ADMIN_EMAILS="you@example.com" && cd ~/recipe-app && source
+  venv/bin/activate && uvicorn main:app --reload --host 0.0.0.0 --port
+  8000`
+
+## Admin access control
+
+As of 2026-09-24, Edit, Approve, Reject, and "Not a cookbook" are
+restricted to admins only — before this, anyone who could reach the site
+at all (so, anyone Cloudflare Access let in: you, your wife, your
+mother-in-law) could edit or delete any recipe or hide any book.
+
+How it works:
+
+- Cloudflare Access already authenticates every visitor (email allowlist
+  + one-time-pin login) before a request reaches this app, and passes the
+  verified email through in the `Cf-Access-Authenticated-User-Email`
+  header.
+- `main.py`'s `is_admin(request)` reads that header and checks it against
+  `ADMIN_EMAILS`, an environment variable (comma-separated if a second
+  admin is ever added) — not hardcoded, since this repo is public.
+  `require_admin(request)` is the same check wrapped as a FastAPI
+  `Depends()` that 403s non-admins outright.
+- **`ADMIN_EMAILS` must be exported before starting the app** (see "Run
+  with" above) or nobody is admin, including you — that's a deliberate
+  fail-closed default, not a bug. If Edit/Approve/"Not a cookbook" go
+  missing or start 403ing after a restart, check this first.
+- **Known, accepted gap:** uvicorn binds to `0.0.0.0`, not `127.0.0.1`,
+  so the app is reachable directly over the home LAN (e.g. from a Mac at
+  `http://<junipernine2-LAN-IP>:8000`), not just through the Cloudflare
+  Tunnel — this is deliberate, for convenience managing a headless box
+  from elsewhere on the network. The consequence: the
+  `Cf-Access-Authenticated-User-Email` header is only genuinely
+  trustworthy when Cloudflare Access is the only thing that can set it,
+  and that stops being true once the app is reachable directly. A device
+  on the LAN that specifically crafted a request with that header set
+  (e.g. `curl -H "Cf-Access-Authenticated-User-Email: you@example.com"`)
+  would be treated as admin — nothing here verifies the header
+  cryptographically. Ordinary browsing from a LAN device does *not*
+  grant admin (browsers don't send this header on their own), so this
+  isn't a hole a casual visitor stumbles into, but it isn't a hard
+  boundary against anyone on the network who goes looking for it either.
+  Accepted as-is (2026-09-24) given who's actually on this home network;
+  if that ever changes, the fix is either binding back to `127.0.0.1`
+  (loses direct-LAN access) or switching to verifying Cloudflare's JWT
+  (`Cf-Access-Jwt-Assertion`) instead of trusting the plain header.
+- Gated routes: `GET`/`POST /recipes/{id}/edit`, `POST
+  /recipes/{id}/approve`, `DELETE /recipes/{id}`, `POST /books/exclude`,
+  `GET`/`POST /recipes/new` (adding a recipe by hand), and the `/review`
+  queue itself. Viewing a recipe that hasn't been approved yet
+  (`GET /recipes/{id}`) also 403s for non-admins, even via a direct link.
+- Templates receive `is_admin` in their context and hide the
+  corresponding buttons/links client-side — that's convenience, not the
+  actual security boundary, which is the server-side `require_admin`
+  check.
 
 ## Phase 2 (not started): recipe extraction
 

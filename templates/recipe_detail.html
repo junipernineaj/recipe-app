@@ -10,6 +10,7 @@
         <div class="recipe-header">
             <h1>{{ recipe["title"] }}</h1>
             <p class="source">From: {{ recipe["source_book"] }}{% if recipe["engine"] %} &middot; extracted by {{ recipe["engine"] }}{% endif %}</p>
+            {% if is_admin %}
             <a href="/recipes/{{ recipe['id'] }}/edit" class="btn">Edit</a>
             {% if recipe["status"] != "approved" %}
             <div class="review-banner">
@@ -21,6 +22,7 @@
                     <button type="submit">Approve</button>
                 </form>
             </div>
+            {% endif %}
             {% endif %}
         </div>
 

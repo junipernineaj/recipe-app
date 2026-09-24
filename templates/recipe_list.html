@@ -5,6 +5,7 @@
             <a href="/recipes/{{ recipe['id'] }}">{{ recipe["title"] }}</a>
             <span class="source">{{ recipe["source_book"] }}</span>
         </div>
+        {% if is_admin %}
         <button
             class="delete-btn"
             hx-delete="/recipes/{{ recipe['id'] }}"
@@ -13,6 +14,7 @@
             hx-confirm="Delete '{{ recipe['title'] }}'? This can't be undone.">
             Delete
         </button>
+        {% endif %}
     </li>
     {% else %}
     <li class="empty-state">No recipes found.</li>

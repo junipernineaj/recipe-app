@@ -1,6 +1,6 @@
 import os
 import sqlite3
-from fastapi import FastAPI, Request, Form, Response
+from fastapi import FastAPI, Request, Form, Response, HTTPException, Depends
 from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
@@ -11,6 +11,33 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
 INVENTORY_DB_PATH = os.path.expanduser("~/cookbook-project/inventory.sqlite")
+
+# Cloudflare Access already authenticates every visitor (email allowlist +
+# one-time-pin login) before a request ever reaches this app, and it passes
+# the verified email through in this header. Trusting the header outright is
+# only safe because uvicorn is bound to 127.0.0.1 below: nothing but the
+# cloudflared tunnel process on this same machine can reach the app, so
+# nobody outside can forge this header. ADMIN_EMAILS is read from the
+# environment (not hardcoded) since this repo is public -- set it wherever
+# you start the app, e.g.:
+#   export ADMIN_EMAILS="you@example.com"
+# If it's unset, is_admin() is False for everyone, including you -- that's
+# a deliberate fail-closed default, not a bug.
+ADMIN_EMAILS = {
+    e.strip().lower()
+    for e in os.environ.get("ADMIN_EMAILS", "").split(",")
+    if e.strip()
+}
+
+
+def is_admin(request: Request) -> bool:
+    email = (request.headers.get("Cf-Access-Authenticated-User-Email") or "").strip().lower()
+    return bool(email) and email in ADMIN_EMAILS
+
+
+def require_admin(request: Request):
+    if not is_admin(request):
+        raise HTTPException(status_code=403, detail="Admins only")
 
 
 def get_recipes(search_term: str = ""):
@@ -178,7 +205,7 @@ def get_book_status_counts(show_hidden: bool = False):
 def read_root(request: Request):
     recipes = get_recipes()
     return templates.TemplateResponse(
-        request=request, name="home.html", context={"recipes": recipes}
+        request=request, name="home.html", context={"recipes": recipes, "is_admin": is_admin(request)}
     )
 
 
@@ -186,14 +213,14 @@ def read_root(request: Request):
 def search(request: Request, q: str = ""):
     recipes = get_recipes(q)
     return templates.TemplateResponse(
-        request=request, name="recipe_list.html", context={"recipes": recipes}
+        request=request, name="recipe_list.html", context={"recipes": recipes, "is_admin": is_admin(request)}
     )
 
 @app.get("/review")
-def review_page(request: Request):
+def review_page(request: Request, _: None = Depends(require_admin)):
     recipes = get_pending_recipes()
     return templates.TemplateResponse(
-        request=request, name="review.html", context={"recipes": recipes}
+        request=request, name="review.html", context={"recipes": recipes, "is_admin": True}
     )
 
 @app.get("/books")
@@ -202,7 +229,7 @@ def books_page(request: Request, sort: str = "filename_asc", show_hidden: bool =
     counts = get_book_status_counts(show_hidden=show_hidden)
     return templates.TemplateResponse(
         request=request, name="books.html",
-        context={"books": books, "counts": counts, "sort": sort, "show_hidden": show_hidden}
+        context={"books": books, "counts": counts, "sort": sort, "show_hidden": show_hidden, "is_admin": is_admin(request)}
     )
 
 @app.get("/books/search")
@@ -210,11 +237,11 @@ def books_search(request: Request, q: str = "", status: str = "", sort: str = "f
     books = get_books(search_term=q, status_filter=status, sort=sort, show_hidden=show_hidden)
     return templates.TemplateResponse(
         request=request, name="books_list.html",
-        context={"books": books, "sort": sort, "show_hidden": show_hidden}
+        context={"books": books, "sort": sort, "show_hidden": show_hidden, "is_admin": is_admin(request)}
     )
 
 @app.post("/books/exclude")
-def exclude_book(path: str = Form(...)):
+def exclude_book(path: str = Form(...), _: None = Depends(require_admin)):
     conn = sqlite3.connect(INVENTORY_DB_PATH)
     conn.execute("UPDATE inventory SET excluded = 1 WHERE path = ?", (path,))
     conn.commit()
@@ -254,7 +281,7 @@ def view_book(path: str):
 
 
 @app.get("/recipes/new")
-def new_recipe_form(request: Request):
+def new_recipe_form(request: Request, _: None = Depends(require_admin)):
     return templates.TemplateResponse(request=request, name="new_recipe.html", context={})
 
 
@@ -264,6 +291,7 @@ def add_recipe(
     source_book: str = Form(""),
     ingredients: str = Form(""),
     instructions: str = Form(""),
+    _: None = Depends(require_admin),
 ):
     create_recipe(title, source_book, ingredients, instructions)
     return RedirectResponse(url="/", status_code=303)
@@ -272,17 +300,20 @@ def add_recipe(
 @app.get("/recipes/{recipe_id}")
 def recipe_detail(request: Request, recipe_id: int):
     recipe = get_recipe_by_id(recipe_id)
+    admin = is_admin(request)
+    if recipe["status"] != "approved" and not admin:
+        raise HTTPException(status_code=403, detail="This recipe hasn't been approved yet")
     ingredients = recipe["ingredients"].split("\n")
     instructions = recipe["instructions"].split("\n")
     return templates.TemplateResponse(
         request=request,
         name="recipe_detail.html",
-        context={"recipe": recipe, "ingredients": ingredients, "instructions": instructions}
+        context={"recipe": recipe, "ingredients": ingredients, "instructions": instructions, "is_admin": admin}
     )
 
 
 @app.get("/recipes/{recipe_id}/edit")
-def edit_recipe_form(request: Request, recipe_id: int):
+def edit_recipe_form(request: Request, recipe_id: int, _: None = Depends(require_admin)):
     recipe = get_recipe_by_id(recipe_id)
     return templates.TemplateResponse(
         request=request, name="recipe_edit.html", context={"recipe": recipe}
@@ -300,13 +331,14 @@ def edit_recipe(
     instructions: str = Form(""),
     notes: str = Form(""),
     flagged_for_review: str = Form(""),
+    _: None = Depends(require_admin),
 ):
     update_recipe(recipe_id, title, servings, prep_time, cook_time, ingredients, instructions, notes, flagged_for_review)
     return RedirectResponse(url=f"/recipes/{recipe_id}", status_code=303)
 
 
 @app.post("/recipes/{recipe_id}/approve")
-def approve_recipe(recipe_id: int):
+def approve_recipe(recipe_id: int, _: None = Depends(require_admin)):
     conn = sqlite3.connect("recipes.db")
     conn.execute("UPDATE recipes SET status = 'approved' WHERE id = ?", (recipe_id,))
     conn.commit()
@@ -315,7 +347,7 @@ def approve_recipe(recipe_id: int):
 
 
 @app.delete("/recipes/{recipe_id}")
-def delete_recipe(recipe_id: int):
+def delete_recipe(recipe_id: int, _: None = Depends(require_admin)):
     conn = sqlite3.connect("recipes.db")
     cursor = conn.cursor()
     cursor.execute("DELETE FROM recipes WHERE id = ?", (recipe_id,))
