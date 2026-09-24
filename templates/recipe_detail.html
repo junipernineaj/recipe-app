@@ -9,7 +9,18 @@
         <a class="back-link" href="/">&larr; Back to all recipes</a>
         <div class="recipe-header">
             <h1>{{ recipe["title"] }}</h1>
-            <p class="source">From: {{ recipe["source_book"] }}</p>
+            <p class="source">From: {{ recipe["source_book"] }}{% if recipe["engine"] %} &middot; extracted by {{ recipe["engine"] }}{% endif %}</p>
+            {% if recipe["status"] != "approved" %}
+            <div class="review-banner">
+                <span>Pending review</span>
+                {% if recipe["flagged_for_review"] %}
+                <p class="flag-note">&#9888; {{ recipe["flagged_for_review"] }}</p>
+                {% endif %}
+                <form method="post" action="/recipes/{{ recipe['id'] }}/approve">
+                    <button type="submit">Approve</button>
+                </form>
+            </div>
+            {% endif %}
         </div>
 
         <div class="recipe-section">
