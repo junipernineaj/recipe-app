@@ -332,6 +332,14 @@ def insert_recipe(conn, recipe, book_title, source_path, page_start, page_end, e
     instructions = [line for line in recipe.get("instructions", []) if line and line.strip()]
 
     flagged_for_review = recipe.get("flagged_for_review")
+    # Some models answer "is anything wrong? no" by writing the literal
+    # string "false" into this field instead of just omitting it like the
+    # prompt asks (seen in practice with qwen3:14b). That's still a
+    # non-empty string, so it reads as truthy everywhere the app checks
+    # `if recipe["flagged_for_review"]`, giving the recipe an unwarranted
+    # "flagged" banner in the review queue. Treat it the same as no flag.
+    if isinstance(flagged_for_review, str) and flagged_for_review.strip().lower() == "false":
+        flagged_for_review = None
     if not ingredients or not instructions:
         missing = " or ".join(
             name for name, values in (("ingredients", ingredients), ("instructions", instructions))
