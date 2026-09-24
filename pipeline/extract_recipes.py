@@ -73,10 +73,19 @@ For each recipe, include these fields:
 - "servings": string, only if explicitly stated in the text (otherwise omit)
 - "prep_time": string, only if explicitly stated (otherwise omit) -- never estimate one yourself
 - "cook_time": string, only if explicitly stated (otherwise omit) -- never estimate one yourself
-- "ingredients": a list of strings, one per ingredient, in the order they appear
-- "instructions": a list of strings, one per method step
+- "ingredients": a list of strings, one per ingredient, in the exact order they appear in the source text
+- "instructions": a list of strings, one per method step, in the exact order they appear in the source text
 - "notes": a list of strings, for any tip, aside, or sidebar note that isn't a core instruction (empty list if none)
 - "flagged_for_review": a short string explaining any uncertainty (e.g. an OCR-garbled quantity you had to guess at), omit entirely if nothing is uncertain
+
+This is a transcription task, not a rewriting task. Copy the exact wording,
+phrasing, and sentence structure from the source text for every ingredient
+and every instruction step -- split into list items only where the source
+already breaks into separate lines or steps. Do not paraphrase, summarize,
+condense multiple sentences into one, change word choice, or reorder,
+regroup, or reorganize items into what seems like a more logical sequence.
+If you notice yourself compressing or rewording a sentence, stop and copy
+the original wording instead.
 
 Skip anything that is not an actual recipe: front matter, copyright pages, tables of
 contents, essays/introductions, reference tables (like a cooking-time chart) that have
@@ -282,6 +291,27 @@ def call_claude(client, model, chunk_text, retries=2):
 
 
 def insert_recipe(conn, recipe, book_title, source_path, page_start, page_end, engine="claude-api"):
+    # The JSON schema only enforces that ingredients/instructions are
+    # present, not that they contain anything real -- a model can satisfy
+    # it with a blank/whitespace-only entry (seen in practice: a recipe
+    # with a real title but an empty ingredients list and an empty
+    # instructions list). Strip blanks and, if either list ends up empty,
+    # flag it loudly rather than silently inserting something that looks
+    # like a normal reviewable recipe until you click in and find nothing,
+    # or silently dropping it and losing the fact that a recipe exists on
+    # that page at all.
+    ingredients = [line for line in recipe.get("ingredients", []) if line and line.strip()]
+    instructions = [line for line in recipe.get("instructions", []) if line and line.strip()]
+
+    flagged_for_review = recipe.get("flagged_for_review")
+    if not ingredients or not instructions:
+        missing = " or ".join(
+            name for name, values in (("ingredients", ingredients), ("instructions", instructions))
+            if not values
+        )
+        note = f"Extraction returned no {missing} for this recipe -- check the source page and fill in by hand or reject."
+        flagged_for_review = f"{flagged_for_review} {note}" if flagged_for_review else note
+
     conn.execute("""
         INSERT INTO recipes
             (title, source_book, source_path, source_page, source_page_end,
@@ -294,13 +324,13 @@ def insert_recipe(conn, recipe, book_title, source_path, page_start, page_end, e
         source_path,
         page_start,
         page_end,
-        "\n".join(recipe.get("ingredients", [])),
-        "\n".join(recipe.get("instructions", [])),
+        "\n".join(ingredients),
+        "\n".join(instructions),
         recipe.get("servings"),
         recipe.get("prep_time"),
         recipe.get("cook_time"),
         "\n".join(recipe.get("notes", [])) if recipe.get("notes") else None,
-        recipe.get("flagged_for_review"),
+        flagged_for_review,
         engine,
     ))
 

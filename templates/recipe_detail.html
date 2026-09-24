@@ -10,6 +10,11 @@
         <div class="recipe-header">
             <h1>{{ recipe["title"] }}</h1>
             <p class="source">From: {{ recipe["source_book"] }}{% if recipe["engine"] %} &middot; extracted by {{ recipe["engine"] }}{% endif %}</p>
+            {% if recipe["source_path"] and recipe["source_page"] %}
+            <a href="/recipes/{{ recipe['id'] }}/source#page={{ recipe['source_page'] }}" target="_blank" rel="noopener" class="btn">
+                &#128196; View original page{% if recipe['source_page_end'] and recipe['source_page_end'] != recipe['source_page'] %}s {{ recipe['source_page'] }}&ndash;{{ recipe['source_page_end'] }}{% else %} {{ recipe['source_page'] }}{% endif %}
+            </a>
+            {% endif %}
             {% if is_admin %}
             <a href="/recipes/{{ recipe['id'] }}/edit" class="btn">Edit</a>
             {% if recipe["status"] != "approved" %}

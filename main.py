@@ -14,10 +14,15 @@ INVENTORY_DB_PATH = os.path.expanduser("~/cookbook-project/inventory.sqlite")
 
 # Cloudflare Access already authenticates every visitor (email allowlist +
 # one-time-pin login) before a request ever reaches this app, and it passes
-# the verified email through in this header. Trusting the header outright is
-# only safe because uvicorn is bound to 127.0.0.1 below: nothing but the
-# cloudflared tunnel process on this same machine can reach the app, so
-# nobody outside can forge this header. ADMIN_EMAILS is read from the
+# the verified email through in this header. Trusting it isn't an absolute
+# guarantee here: uvicorn binds to 0.0.0.0, not 127.0.0.1 (deliberate --
+# see documentation/ARCHITECTURE.md "Admin access control" for why), so the
+# app is also reachable directly on the home LAN, not only through the
+# Cloudflare Tunnel. A device on the LAN that specifically crafts this
+# header itself could pose as an admin; ordinary browsing from a LAN device
+# does not (browsers don't send this header on their own). Accepted as-is
+# for this home network -- see ARCHITECTURE.md for the full reasoning and
+# the fix if that risk profile ever changes. ADMIN_EMAILS is read from the
 # environment (not hardcoded) since this repo is public -- set it wherever
 # you start the app, e.g.:
 #   export ADMIN_EMAILS="you@example.com"
@@ -310,6 +315,19 @@ def recipe_detail(request: Request, recipe_id: int):
         name="recipe_detail.html",
         context={"recipe": recipe, "ingredients": ingredients, "instructions": instructions, "is_admin": admin}
     )
+
+
+@app.get("/recipes/{recipe_id}/source")
+def recipe_source(request: Request, recipe_id: int):
+    recipe = get_recipe_by_id(recipe_id)
+    if recipe is None:
+        return Response(status_code=404, content="Recipe not found")
+    if recipe["status"] != "approved" and not is_admin(request):
+        raise HTTPException(status_code=403, detail="This recipe hasn't been approved yet")
+    source_path = recipe["source_path"]
+    if not source_path or not os.path.exists(source_path):
+        return Response(status_code=404, content="Source file not found on disk (is the drive mounted?)")
+    return FileResponse(source_path)
 
 
 @app.get("/recipes/{recipe_id}/edit")

@@ -107,7 +107,22 @@ def call_ollama(host, model, chunk_text, retries=2):
                     "messages": [{"role": "user", "content": prompt}],
                     "stream": False,
                     "format": RECIPE_RESPONSE_SCHEMA,
-                    "options": {"temperature": 0.2},
+                    "options": {
+                        "temperature": 0.2,
+                        # Without a cap, a model can spiral into repeating
+                        # itself indefinitely instead of emitting the JSON
+                        # array's closing bracket -- seen in practice on
+                        # 2026-09-24 (a single chunk ran to 23,000+ generated
+                        # tokens and overflowed the context window before the
+                        # 600s request timeout finally cut it off). num_predict
+                        # forces a much cheaper failure well before that, and
+                        # repeat_penalty makes the underlying loop less likely
+                        # to start in the first place. A run that actually
+                        # needs more than this many tokens for one chunk was
+                        # going to produce something too large to trust anyway.
+                        "num_predict": 8000,
+                        "repeat_penalty": 1.15,
+                    },
                 },
                 timeout=600,
             )
