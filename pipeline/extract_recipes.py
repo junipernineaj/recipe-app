@@ -89,7 +89,12 @@ the original wording instead.
 
 Skip anything that is not an actual recipe: front matter, copyright pages, tables of
 contents, essays/introductions, reference tables (like a cooking-time chart) that have
-no ingredients or method of their own.
+no ingredients or method of their own, and an alphabetical index or glossary near the
+back of the book that lists dish or ingredient names with page-number cross-references
+instead of actual ingredients and method. A telltale sign of an index rather than real
+recipes: the same name appears more than once, grouped under different headings -- e.g.
+once under its own name and again under a broader category like "salads" or "weddings"
+-- with no real ingredients or instructions attached to any occurrence of it.
 
 If an ingredient quantity looks OCR-corrupted (e.g. a garbled fraction like "1/9" or
 "'/z"), make your best reasonable guess at the intended value and explain the guess in
