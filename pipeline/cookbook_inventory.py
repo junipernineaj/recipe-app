@@ -289,6 +289,67 @@ def already_scanned(conn, path_str):
     cur = conn.execute("SELECT 1 FROM inventory WHERE path = ? AND status != 'error'", (path_str,))
     return cur.fetchone() is not None
 
+def prune_missing(conn, source: Path, archive_dirs):
+    """Remove inventory rows for files that vanished from `source` with NO
+    trace of having ever been processed. A row is protected -- never deleted,
+    no matter where its file currently lives -- if it already has OCR history
+    or a non-pending status (readable_native, compressed, etc). Only a row
+    that was never processed at all, whose file is now gone, is a candidate
+    for removal, and even then only when a same-named file is confirmed
+    sitting in one of `archive_dirs`.
+    """
+    ALREADY_TRACKED_STATUSES = {
+        "readable_native", "unsupported_extension",
+        "readable_via_calibre", "native_force_reocred",
+    }
+
+    cur = conn.execute("SELECT path, filename, status FROM inventory")
+    rows = cur.fetchall()
+
+    safe_to_prune = []
+    missing_no_archive = []
+    protected = 0
+    for path_str, filename, status in rows:
+        p = Path(path_str)
+        try:
+            p.relative_to(source)
+        except ValueError:
+            continue  # row belongs to a different source root, leave it alone
+        if p.exists():
+            continue  # still there, nothing to do
+
+        if status in ALREADY_TRACKED_STATUSES:
+            protected += 1
+            continue
+        if conn.execute("SELECT 1 FROM ocr_results WHERE path = ?", (path_str,)).fetchone():
+            protected += 1
+            continue
+
+        archived = any((Path(d).expanduser() / filename).exists() for d in archive_dirs)
+        if archived:
+            safe_to_prune.append(path_str)
+        else:
+            missing_no_archive.append(path_str)
+
+    if safe_to_prune:
+        conn.executemany("DELETE FROM inventory WHERE path = ?", [(p,) for p in safe_to_prune])
+        conn.commit()
+
+    print("\n=== Prune ===")
+    print(f"  Protected {protected} row(s) with existing OCR/compress history or a "
+          f"non-pending status -- these are fully tracked books, left untouched "
+          f"no matter where their file currently lives.")
+    print(f"  Removed {len(safe_to_prune)} true ghost row(s) -- never processed, gone from "
+          f"{source}, but a matching filename was found already archived.")
+    if missing_no_archive:
+        print(f"  WARNING: {len(missing_no_archive)} file(s) are missing from {source} "
+              f"with NO archived copy found in --archive-dir. NOT deleted -- review these "
+              f"by hand, they may represent real data loss:")
+        for p in missing_no_archive[:20]:
+            print(f"    {p}")
+        if len(missing_no_archive) > 20:
+            print(f"    ... and {len(missing_no_archive) - 20} more")
+
 
 def export_csv(conn, csv_path: Path):
     cur = conn.execute(
@@ -345,12 +406,35 @@ def main():
     ap.add_argument("--sample", type=int, default=0, help="only process the first N files found (dry run)")
     ap.add_argument("--resume", action="store_true", help="skip files already recorded in the db")
     ap.add_argument("--commit-every", type=int, default=20, help="db commit batch size (default 20)")
+    ap.add_argument("--prune", action="store_true",
+                     help="before scanning, remove inventory rows whose file has disappeared "
+                          "from --source (e.g. archived away after processing). Only deletes a "
+                          "row when a same-named file is found in one of --archive-dir; anything "
+                          "missing with no archived copy is reported, never auto-deleted.")
+    ap.add_argument("--archive-dir", action="append", default=[],
+                     help="directory to check for an archived copy when pruning (e.g. "
+                          "cookbook_ocr_output or cookbook_ocr_compressed). Repeatable.")
+    ap.add_argument("--prune-only", action="store_true",
+                     help="just prune and print the summary, skip the scan entirely")
     args = ap.parse_args()
 
     source = Path(args.source).expanduser()
     if not source.is_dir():
         print(f"Source directory not found: {source}", file=sys.stderr)
         sys.exit(1)
+
+    if args.prune or args.prune_only:
+        conn = init_db(Path(args.db))
+        if not args.archive_dir:
+            print("WARNING: --prune with no --archive-dir given -- nothing can be confirmed "
+                  "archived, so every missing file will be reported but none deleted.",
+                  file=sys.stderr)
+        prune_missing(conn, source, args.archive_dir)
+        if args.prune_only:
+            print_summary(conn)
+            conn.close()
+            return
+        conn.close()
 
     print(f"Scanning {source} recursively...")
     everything = [p for p in source.rglob("*") if p.is_file()]
