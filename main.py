@@ -76,7 +76,7 @@ def get_books(search_term: str = "", status_filter: str = "", sort: str = "filen
                 END AS status
             FROM inventory i
             LEFT JOIN ocr_results o ON i.path = o.path
-            LEFT JOIN compress_results c ON o.output_path = c.path
+            LEFT JOIN compress_results c ON c.path = COALESCE(o.output_path, i.path)
         )
         WHERE 1=1
     """
@@ -126,7 +126,7 @@ def get_book_status_counts(show_hidden: bool = False):
                 END AS status
             FROM inventory i
             LEFT JOIN ocr_results o ON i.path = o.path
-            LEFT JOIN compress_results c ON o.output_path = c.path
+            LEFT JOIN compress_results c ON c.path = COALESCE(o.output_path, i.path)
         )
     """
     if not show_hidden:
@@ -191,7 +191,7 @@ def view_book(path: str):
                  THEN c.output_path ELSE NULL END AS compressed_path
         FROM inventory i
         LEFT JOIN ocr_results o ON i.path = o.path
-        LEFT JOIN compress_results c ON o.output_path = c.path
+        LEFT JOIN compress_results c ON c.path = COALESCE(o.output_path, i.path)
         WHERE i.path = ?
     """, (path,))
     row = cursor.fetchone()
