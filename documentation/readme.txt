@@ -12,3 +12,10 @@ echo "=== Local files that already match a name in cookbook_ocr_output ==="
 comm -12 /tmp/local_names.txt /tmp/remote_names.txt
 
 
+python3 extract_recipes_local.py \
+    --pdf "/path/to/book.pdf" \
+    --book-title "Some Book" \
+    --db ~/recipe-app/recipes.db \
+    --model qwen3:14b \
+    --pages-per-chunk 10
+
