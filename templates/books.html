@@ -32,6 +32,25 @@
     </button>
 </div>
 
+{% if is_admin %}
+<div class="status-summary">
+    <button type="button" class="status-badge status-compressed"
+            hx-get="/books/search"
+            hx-vals='{"recipes_filter": "done"}'
+            hx-target="#books-list"
+            hx-swap="outerHTML">
+        &#10003; Recipes extracted: {{ recipe_counts['done'] }}
+    </button>
+    <button type="button" class="status-badge status-needs_ocr"
+            hx-get="/books/search"
+            hx-vals='{"recipes_filter": "not_done"}'
+            hx-target="#books-list"
+            hx-swap="outerHTML">
+        Not yet extracted: {{ recipe_counts['not_done'] }}
+    </button>
+</div>
+{% endif %}
+
         <input type="search" name="q" class="search-input" placeholder="Search books by filename..."
                hx-get="/books/search"
                hx-trigger="keyup changed delay:300ms, search"

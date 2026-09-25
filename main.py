@@ -1,4 +1,5 @@
 import os
+import re
 import sqlite3
 from fastapi import FastAPI, Request, Form, Response, HTTPException, Depends
 from fastapi.responses import RedirectResponse
@@ -9,6 +10,63 @@ from fastapi.responses import RedirectResponse, FileResponse
 app = FastAPI()
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
+
+# Extracted titles come out however the source book (or the model) styled
+# them -- some in ALL CAPS, some all lowercase, some already fine -- and
+# it's not worth normalizing that in the database, since the raw extracted
+# value is still useful to see when editing/reviewing. Instead, title-case
+# it for display only, everywhere a title is shown to a viewer.
+_MINOR_WORDS = {
+    "a", "an", "and", "as", "at", "but", "by", "for", "from", "in",
+    "into", "nor", "of", "on", "onto", "or", "over", "per", "so",
+    "the", "to", "up", "via", "with", "yet",
+}
+_FIRST_LETTER_RE = re.compile(r"[A-Za-z]")
+
+
+def _capitalize_word(word: str) -> str:
+    """Uppercases just the first letter of each hyphen-separated part of a
+    word, leaving everything else untouched. That's what makes this safe
+    on apostrophes -- "witches'" becomes "Witches'", never "Witches'S" the
+    way Python's built-in str.title() would mangle a word like "don't"
+    into "Don'T" -- we only ever touch the very first letter of each part,
+    nothing after an apostrophe."""
+    parts = word.split("-")
+    capitalized = []
+    for part in parts:
+        m = _FIRST_LETTER_RE.search(part)
+        if m:
+            i = m.start()
+            part = part[:i] + part[i].upper() + part[i + 1:]
+        capitalized.append(part)
+    return "-".join(capitalized)
+
+
+def smart_title_case(title: str) -> str:
+    """Title-cases a recipe title for display, regardless of how it's
+    capitalized in the database (ALL CAPS from an OCR'd heading, all
+    lowercase from a model that didn't bother, whatever). Lowercases
+    everything first so the input casing can't interfere, then capitalizes
+    each "major" word -- short connecting words (a, and, of, with, ...)
+    stay lowercase unless they're the first or last word, same convention
+    as a book's own chapter headings."""
+    if not title:
+        return title
+    words = title.lower().split()
+    if not words:
+        return title
+    last_index = len(words) - 1
+    result = []
+    for i, word in enumerate(words):
+        core = word.strip(".,;:!?()[]{}\"'")
+        if core in _MINOR_WORDS and 0 < i < last_index:
+            result.append(word)
+        else:
+            result.append(_capitalize_word(word))
+    return " ".join(result)
+
+
+templates.env.filters["titlecase"] = smart_title_case
 
 INVENTORY_DB_PATH = os.path.expanduser("~/cookbook-project/inventory.sqlite")
 
@@ -74,6 +132,26 @@ def init_recipe_reviews_table():
 
 
 init_recipe_reviews_table()
+
+
+def init_recipes_extracted_column():
+    """Adds a manual per-book tracking column to inventory.sqlite so a book
+    can be ticked off once its recipes have been extracted and reviewed.
+    Deliberately NOT auto-detected from recipes.db (which run, which engine,
+    which --pages-per-chunk a book was processed with all vary), so this is
+    a plain admin-set flag rather than a computed status -- same spirit as
+    the existing 'excluded' column."""
+    conn = sqlite3.connect(INVENTORY_DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("PRAGMA table_info(inventory)")
+    existing_columns = {row[1] for row in cursor.fetchall()}
+    if "recipes_extracted" not in existing_columns:
+        conn.execute("ALTER TABLE inventory ADD COLUMN recipes_extracted INTEGER NOT NULL DEFAULT 0")
+        conn.commit()
+    conn.close()
+
+
+init_recipes_extracted_column()
 
 
 def get_recipes(search_term: str = ""):
@@ -192,14 +270,14 @@ def upsert_review(recipe_id: int, user_email: str, made_it: bool, rating: int | 
     conn.close()
 
 
-def get_books(search_term: str = "", status_filter: str = "", sort: str = "filename_asc", show_hidden: bool = False):
+def get_books(search_term: str = "", status_filter: str = "", recipes_filter: str = "", sort: str = "filename_asc", show_hidden: bool = False):
     conn = sqlite3.connect(INVENTORY_DB_PATH)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
     base_query = """
         SELECT * FROM (
             SELECT
-                i.path, i.filename, i.excluded,
+                i.path, i.filename, i.excluded, i.recipes_extracted,
                 CASE
                     WHEN c.status = 'verified_ok' THEN c.compressed_bytes
                     ELSE i.size_bytes
@@ -231,6 +309,10 @@ def get_books(search_term: str = "", status_filter: str = "", sort: str = "filen
         params.append(status_filter)
     else:
         base_query += " AND status != 'unsupported_extension'"
+    if recipes_filter == "done":
+        base_query += " AND recipes_extracted = 1"
+    elif recipes_filter == "not_done":
+        base_query += " AND recipes_extracted = 0"
     if search_term:
         base_query += " AND filename LIKE ?"
         params.append(f"%{search_term}%")
@@ -280,6 +362,22 @@ def get_book_status_counts(show_hidden: bool = False):
     conn.close()
     return counts
 
+
+def get_recipe_extraction_counts(show_hidden: bool = False):
+    """How many (non-excluded, by default) books have been ticked off as
+    'recipes extracted' vs. not -- the progress-tracking summary for the
+    library page."""
+    conn = sqlite3.connect(INVENTORY_DB_PATH)
+    cursor = conn.cursor()
+    query = "SELECT recipes_extracted, COUNT(*) FROM inventory"
+    if not show_hidden:
+        query += " WHERE excluded = 0"
+    query += " GROUP BY recipes_extracted"
+    cursor.execute(query)
+    rows = dict(cursor.fetchall())
+    conn.close()
+    return {"done": rows.get(1, 0), "not_done": rows.get(0, 0)}
+
 @app.get("/")
 def read_root(request: Request):
     recipes = get_recipes()
@@ -306,14 +404,15 @@ def review_page(request: Request, _: None = Depends(require_admin)):
 def books_page(request: Request, sort: str = "filename_asc", show_hidden: bool = False):
     books = get_books(sort=sort, show_hidden=show_hidden)
     counts = get_book_status_counts(show_hidden=show_hidden)
+    recipe_counts = get_recipe_extraction_counts(show_hidden=show_hidden)
     return templates.TemplateResponse(
         request=request, name="books.html",
-        context={"books": books, "counts": counts, "sort": sort, "show_hidden": show_hidden, "is_admin": is_admin(request)}
+        context={"books": books, "counts": counts, "recipe_counts": recipe_counts, "sort": sort, "show_hidden": show_hidden, "is_admin": is_admin(request)}
     )
 
 @app.get("/books/search")
-def books_search(request: Request, q: str = "", status: str = "", sort: str = "filename_asc", show_hidden: bool = False):
-    books = get_books(search_term=q, status_filter=status, sort=sort, show_hidden=show_hidden)
+def books_search(request: Request, q: str = "", status: str = "", recipes_filter: str = "", sort: str = "filename_asc", show_hidden: bool = False):
+    books = get_books(search_term=q, status_filter=status, recipes_filter=recipes_filter, sort=sort, show_hidden=show_hidden)
     return templates.TemplateResponse(
         request=request, name="books_list.html",
         context={"books": books, "sort": sort, "show_hidden": show_hidden, "is_admin": is_admin(request)}
@@ -326,6 +425,23 @@ def exclude_book(path: str = Form(...), _: None = Depends(require_admin)):
     conn.commit()
     conn.close()
     return Response(status_code=200)
+
+@app.post("/books/mark-extracted")
+def mark_book_extracted(request: Request, path: str = Form(...), recipes_extracted: str = Form(""), _: None = Depends(require_admin)):
+    """Toggled by the 'Recipes done' checkbox on the library page. An
+    unchecked HTML checkbox simply omits its field from the submitted form
+    rather than sending a false value, so presence/absence of
+    recipes_extracted in the form data (not its content) is what tells us
+    the new state."""
+    value = 1 if recipes_extracted else 0
+    conn = sqlite3.connect(INVENTORY_DB_PATH)
+    conn.execute("UPDATE inventory SET recipes_extracted = ? WHERE path = ?", (value, path))
+    conn.commit()
+    conn.close()
+    return templates.TemplateResponse(
+        request=request, name="recipes_checkbox.html",
+        context={"book": {"path": path, "recipes_extracted": value}}
+    )
 
 @app.get("/books/view")
 def view_book(path: str):
@@ -384,6 +500,7 @@ def recipe_detail(request: Request, recipe_id: int):
         raise HTTPException(status_code=403, detail="This recipe hasn't been approved yet")
     ingredients = recipe["ingredients"].split("\n")
     instructions = recipe["instructions"].split("\n")
+    notes = recipe["notes"].split("\n") if recipe["notes"] else []
 
     user_email = current_user_email(request)
     reviews = get_reviews_for_recipe(recipe_id)
@@ -396,7 +513,7 @@ def recipe_detail(request: Request, recipe_id: int):
         request=request,
         name="recipe_detail.html",
         context={
-            "recipe": recipe, "ingredients": ingredients, "instructions": instructions, "is_admin": admin,
+            "recipe": recipe, "ingredients": ingredients, "instructions": instructions, "notes": notes, "is_admin": admin,
             "user_email": user_email, "reviews": reviews, "my_review": my_review,
             "made_it_count": made_it_count, "avg_rating": avg_rating,
         }

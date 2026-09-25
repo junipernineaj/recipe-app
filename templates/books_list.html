@@ -22,6 +22,7 @@
             <td>{{ book["last_updated"] or "—" }}</td>
             <td>
                 {% if is_admin %}
+                {% include "recipes_checkbox.html" %}
                 <form
                     hx-post="/books/exclude"
                     hx-target="closest tr"

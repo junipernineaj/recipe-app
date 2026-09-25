@@ -1,0 +1,13 @@
+<form
+    hx-post="/books/mark-extracted"
+    hx-target="this"
+    hx-swap="outerHTML"
+    class="recipes-checkbox-form">
+    <input type="hidden" name="path" value="{{ book['path'] }}">
+    <label class="recipes-checkbox-label">
+        <input type="checkbox" name="recipes_extracted" value="1"
+               {% if book['recipes_extracted'] %}checked{% endif %}
+               onchange="this.form.requestSubmit()">
+        Recipes done
+    </label>
+</form>
