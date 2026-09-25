@@ -154,20 +154,37 @@ def init_recipes_extracted_column():
 init_recipes_extracted_column()
 
 
-def get_recipes(search_term: str = ""):
+def get_recipes(search_term: str = "", book_filter: str = ""):
     conn = sqlite3.connect("recipes.db")
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
+    query = "SELECT id, title, source_book FROM recipes WHERE status = 'approved'"
+    params = []
     if search_term:
-        cursor.execute(
-            "SELECT id, title, source_book FROM recipes WHERE status = 'approved' AND title LIKE ?",
-            (f"%{search_term}%",)
-        )
-    else:
-        cursor.execute("SELECT id, title, source_book FROM recipes WHERE status = 'approved'")
+        query += " AND title LIKE ?"
+        params.append(f"%{search_term}%")
+    if book_filter:
+        query += " AND source_book = ?"
+        params.append(book_filter)
+    cursor.execute(query, params)
     recipes = cursor.fetchall()
     conn.close()
     return recipes
+
+
+def get_distinct_source_books():
+    """Books that actually have at least one approved (visible) recipe --
+    used to populate the 'filter by book' dropdown on the home page. Not the
+    same list as the /books library, which covers the whole ~700-book
+    pipeline regardless of extraction status."""
+    conn = sqlite3.connect("recipes.db")
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT DISTINCT source_book FROM recipes WHERE status = 'approved' ORDER BY source_book COLLATE NOCASE"
+    )
+    books = [row[0] for row in cursor.fetchall()]
+    conn.close()
+    return books
 
 
 def get_recipe_by_id(recipe_id: int):
@@ -379,16 +396,18 @@ def get_recipe_extraction_counts(show_hidden: bool = False):
     return {"done": rows.get(1, 0), "not_done": rows.get(0, 0)}
 
 @app.get("/")
-def read_root(request: Request):
-    recipes = get_recipes()
+def read_root(request: Request, book: str = ""):
+    recipes = get_recipes(book_filter=book)
+    books = get_distinct_source_books()
     return templates.TemplateResponse(
-        request=request, name="home.html", context={"recipes": recipes, "is_admin": is_admin(request)}
+        request=request, name="home.html",
+        context={"recipes": recipes, "books": books, "book": book, "is_admin": is_admin(request)}
     )
 
 
 @app.get("/search")
-def search(request: Request, q: str = ""):
-    recipes = get_recipes(q)
+def search(request: Request, q: str = "", book: str = ""):
+    recipes = get_recipes(q, book)
     return templates.TemplateResponse(
         request=request, name="recipe_list.html", context={"recipes": recipes, "is_admin": is_admin(request)}
     )

@@ -1,14 +1,14 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>{{ recipe["title"] }}</title>
+    <title>{{ recipe["title"] | titlecase }}</title>
     <link rel="stylesheet" href="/static/style.css?v=5">
 </head>
 <body>
     <div class="container">
         <a class="back-link" href="/">&larr; Back to all recipes</a>
         <div class="recipe-header">
-            <h1>{{ recipe["title"] }}</h1>
+            <h1>{{ recipe["title"] | titlecase }}</h1>
             <p class="source">From: {{ recipe["source_book"] }}{% if recipe["engine"] %} &middot; extracted by {{ recipe["engine"] }}{% endif %}</p>
             {% if recipe["source_path"] and recipe["source_page"] %}
             <a href="/recipes/{{ recipe['id'] }}/source#page={{ recipe['source_page'] }}" target="_blank" rel="noopener" class="btn">
@@ -48,6 +48,17 @@
                 {% endfor %}
             </ol>
         </div>
+
+        {% if notes %}
+        <div class="recipe-section">
+            <h2>Notes</h2>
+            <ul>
+                {% for line in notes %}
+                <li>{{ line }}</li>
+                {% endfor %}
+            </ul>
+        </div>
+        {% endif %}
 
         <div class="recipe-section">
             <h2>Made it? Rate it.</h2>

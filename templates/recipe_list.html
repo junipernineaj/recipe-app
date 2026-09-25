@@ -2,8 +2,8 @@
     {% for recipe in recipes %}
     <li>
         <div class="recipe-info">
-            <a href="/recipes/{{ recipe['id'] }}">{{ recipe["title"] }}</a>
-            <span class="source">{{ recipe["source_book"] }}</span>
+            <a href="/recipes/{{ recipe['id'] }}">{{ recipe["title"] | titlecase }}</a>
+            <a href="/?book={{ recipe['source_book'] | urlencode }}" class="source" title="Show only recipes from this book">{{ recipe["source_book"] }}</a>
         </div>
         {% if is_admin %}
         <button
@@ -11,7 +11,7 @@
             hx-delete="/recipes/{{ recipe['id'] }}"
             hx-target="closest li"
             hx-swap="outerHTML"
-            hx-confirm="Delete '{{ recipe['title'] }}'? This can't be undone.">
+            hx-confirm="Delete '{{ recipe['title'] | titlecase }}'? This can't be undone.">
             Delete
         </button>
         {% endif %}

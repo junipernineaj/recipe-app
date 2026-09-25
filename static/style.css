@@ -65,6 +65,17 @@ a:hover { text-decoration: underline; }
 }
 .search-input:focus { outline: none; border-color: var(--terracotta); }
 
+.book-filter {
+    padding: 0.6rem 0.9rem;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-size: 0.95rem;
+    background: var(--cream-card);
+    color: var(--brown-dark);
+    max-width: 220px;
+}
+.book-filter:focus { outline: none; border-color: var(--terracotta); }
+
 #recipe-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.9rem; }
 
 #recipe-list li {
@@ -92,6 +103,7 @@ a:hover { text-decoration: underline; }
 .recipe-info a { font-size: 1.1rem; font-weight: 600; color: var(--brown-dark); }
 .recipe-info a:hover { color: var(--terracotta); }
 .recipe-info .source { display: block; font-size: 0.85rem; color: var(--brown-mid); margin-top: 0.15rem; }
+.recipe-info .source:hover { color: var(--terracotta); text-decoration: underline; }
 
 .delete-btn {
     background: none;

@@ -26,7 +26,19 @@
                    hx-get="/search"
                    hx-trigger="keyup changed delay:300ms, search"
                    hx-target="#recipe-list"
-                   hx-swap="outerHTML">
+                   hx-swap="outerHTML"
+                   hx-include="[name='book']">
+            <select name="book" class="book-filter"
+                    hx-get="/search"
+                    hx-trigger="change"
+                    hx-target="#recipe-list"
+                    hx-swap="outerHTML"
+                    hx-include="[name='q']">
+                <option value="">All books</option>
+                {% for b in books %}
+                <option value="{{ b }}" {% if b == book %}selected{% endif %}>{{ b }}</option>
+                {% endfor %}
+            </select>
         </div>
 
         {% include "recipe_list.html" %}
