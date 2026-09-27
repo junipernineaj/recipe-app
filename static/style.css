@@ -211,6 +211,20 @@ form input[type="text"], form textarea {
     color: var(--brown-dark);
 }
 form input[type="text"]:focus, form textarea:focus { outline: none; border-color: var(--terracotta); }
+form select[multiple] {
+    width: 100%;
+    margin-top: 0.35rem;
+    padding: 0.4rem;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-family: inherit;
+    font-size: 0.9rem;
+    background: #fff;
+    color: var(--brown-dark);
+}
+.field-hint { display: block; font-weight: normal; font-size: 0.8rem; color: var(--brown-mid); margin-top: 0.35rem; }
+
+.related-recipes-line { margin: 0.35rem 0; }
 form button[type="submit"] {
     background: var(--olive);
     color: #fff;

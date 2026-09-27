@@ -89,6 +89,27 @@
         </div>
         {% endif %}
 
+        {% if relations and (relations.needs or relations.used_as_base_for or relations.pairs_with) %}
+        <div class="recipe-section">
+            <h2>Related Recipes</h2>
+            {% if relations.needs %}
+            <p class="related-recipes-line"><strong>Needs:</strong>
+                {% for r in relations.needs %}<a href="/recipes/{{ r['id'] }}">{{ r["title"] | titlecase }}</a>{% if not loop.last %}, {% endif %}{% endfor %}
+            </p>
+            {% endif %}
+            {% if relations.used_as_base_for %}
+            <p class="related-recipes-line"><strong>Used as a base for:</strong>
+                {% for r in relations.used_as_base_for %}<a href="/recipes/{{ r['id'] }}">{{ r["title"] | titlecase }}</a>{% if not loop.last %}, {% endif %}{% endfor %}
+            </p>
+            {% endif %}
+            {% if relations.pairs_with %}
+            <p class="related-recipes-line"><strong>Works well with:</strong>
+                {% for r in relations.pairs_with %}<a href="/recipes/{{ r['id'] }}">{{ r["title"] | titlecase }}</a>{% if not loop.last %}, {% endif %}{% endfor %}
+            </p>
+            {% endif %}
+        </div>
+        {% endif %}
+
         <div class="recipe-section">
             <h2>Made it? Rate it.</h2>
             {% if user_email %}

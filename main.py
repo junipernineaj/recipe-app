@@ -169,6 +169,129 @@ def init_recipe_qc_table():
 init_recipe_qc_table()
 
 
+def init_recipe_relations_table():
+    """Links between recipes -- 'needs' (this recipe is built from, or
+    requires, another already in the library, e.g. a puttanesca needing a
+    base tomato sauce) and 'pairs_with' (a looser 'goes well together'
+    link, e.g. a sauce and the pasta it's usually served with). Each row
+    is authored by one recipe (recipe_id) pointing at another
+    (related_recipe_id); 'pairs_with' is treated as mutual at display
+    time by reading both directions, so it only needs entering once."""
+    conn = sqlite3.connect("recipes.db")
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS recipe_relations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            recipe_id INTEGER NOT NULL,
+            related_recipe_id INTEGER NOT NULL,
+            relation_type TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE(recipe_id, related_recipe_id, relation_type)
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+
+init_recipe_relations_table()
+
+
+def get_recipes_for_book(source_book, exclude_id=None):
+    """Every recipe sharing source_book with the recipe being edited (used
+    to populate the Needs / Works well with dropdowns) -- deliberately
+    scoped to the same book, since a cross-book reference to a recipe
+    that might get renamed, re-extracted, or never approved is a lot more
+    fragile than one within a single cookbook."""
+    conn = sqlite3.connect("recipes.db")
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT id, title FROM recipes WHERE source_book IS ? AND id != ? ORDER BY title",
+        (source_book, exclude_id),
+    )
+    recipes = cursor.fetchall()
+    conn.close()
+    return recipes
+
+
+def get_authored_relation_ids(recipe_id, relation_type):
+    """The set of related_recipe_id values this recipe itself has
+    authored for one relation_type -- used to pre-select the edit form's
+    dropdowns with exactly what a save would reproduce (as opposed to
+    get_recipe_relations' merged, bidirectional view used for display)."""
+    conn = sqlite3.connect("recipes.db")
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT related_recipe_id FROM recipe_relations WHERE recipe_id = ? AND relation_type = ?",
+        (recipe_id, relation_type),
+    )
+    ids = {row[0] for row in cursor.fetchall()}
+    conn.close()
+    return ids
+
+
+def get_recipe_relations(recipe_id):
+    """The relations to show on a recipe's own page: recipes it needs,
+    recipes that need IT (the reverse of 'needs' -- e.g. viewing a base
+    tomato sauce shows every recipe built on top of it), and recipes it
+    pairs with (merged from both directions, since a pairing is mutual
+    regardless of which recipe's edit form it was entered on)."""
+    conn = sqlite3.connect("recipes.db")
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+
+    needs = cursor.execute("""
+        SELECT r.id, r.title FROM recipe_relations rel
+        JOIN recipes r ON r.id = rel.related_recipe_id
+        WHERE rel.recipe_id = ? AND rel.relation_type = 'needs'
+        ORDER BY r.title
+    """, (recipe_id,)).fetchall()
+
+    used_as_base_for = cursor.execute("""
+        SELECT r.id, r.title FROM recipe_relations rel
+        JOIN recipes r ON r.id = rel.recipe_id
+        WHERE rel.related_recipe_id = ? AND rel.relation_type = 'needs'
+        ORDER BY r.title
+    """, (recipe_id,)).fetchall()
+
+    pairs_with = cursor.execute("""
+        SELECT r.id, r.title FROM recipe_relations rel
+        JOIN recipes r ON r.id = rel.related_recipe_id
+        WHERE rel.recipe_id = ? AND rel.relation_type = 'pairs_with'
+        UNION
+        SELECT r.id, r.title FROM recipe_relations rel
+        JOIN recipes r ON r.id = rel.recipe_id
+        WHERE rel.related_recipe_id = ? AND rel.relation_type = 'pairs_with'
+        ORDER BY title
+    """, (recipe_id, recipe_id)).fetchall()
+
+    conn.close()
+    return {"needs": needs, "used_as_base_for": used_as_base_for, "pairs_with": pairs_with}
+
+
+def set_recipe_relations(recipe_id, needs_ids, pairs_with_ids):
+    """Replaces every relation authored BY this recipe (recipe_id = this)
+    with exactly what was submitted -- relations authored by other
+    recipes pointing at this one (e.g. another recipe's 'needs' entry, or
+    the reverse side of a mutual pairing) are untouched, since they don't
+    belong to this recipe's row."""
+    conn = sqlite3.connect("recipes.db")
+    conn.execute("DELETE FROM recipe_relations WHERE recipe_id = ?", (recipe_id,))
+    for rid in needs_ids:
+        if rid != recipe_id:
+            conn.execute(
+                "INSERT OR IGNORE INTO recipe_relations (recipe_id, related_recipe_id, relation_type, created_at) VALUES (?, ?, 'needs', datetime('now'))",
+                (recipe_id, rid),
+            )
+    for rid in pairs_with_ids:
+        if rid != recipe_id:
+            conn.execute(
+                "INSERT OR IGNORE INTO recipe_relations (recipe_id, related_recipe_id, relation_type, created_at) VALUES (?, ?, 'pairs_with', datetime('now'))",
+                (recipe_id, rid),
+            )
+    conn.commit()
+    conn.close()
+
+
 def _attach_qc_info(conn, recipes: list[dict]) -> list[dict]:
     """Fetches every recorded QC check for the given recipes (as plain
     dicts, id keyed) and annotates each with qc_hard_total/qc_hard_passed
@@ -638,6 +761,7 @@ def recipe_detail(request: Request, recipe_id: int):
     rated = [r["rating"] for r in reviews if r["rating"]]
     avg_rating = round(sum(rated) / len(rated), 1) if rated else None
     qc_results = get_qc_results_for_recipe(recipe_id) if admin else []
+    relations = get_recipe_relations(recipe_id)
 
     return templates.TemplateResponse(
         request=request,
@@ -645,7 +769,7 @@ def recipe_detail(request: Request, recipe_id: int):
         context={
             "recipe": recipe, "ingredients": ingredients, "instructions": instructions, "notes": notes, "is_admin": admin,
             "user_email": user_email, "reviews": reviews, "my_review": my_review,
-            "made_it_count": made_it_count, "avg_rating": avg_rating, "qc_results": qc_results,
+            "made_it_count": made_it_count, "avg_rating": avg_rating, "qc_results": qc_results, "relations": relations,
         }
     )
 
@@ -697,13 +821,21 @@ def recipe_source(request: Request, recipe_id: int):
 @app.get("/recipes/{recipe_id}/edit")
 def edit_recipe_form(request: Request, recipe_id: int, _: None = Depends(require_admin)):
     recipe = get_recipe_by_id(recipe_id)
+    book_recipes = get_recipes_for_book(recipe["source_book"], exclude_id=recipe_id)
+    needs_ids = get_authored_relation_ids(recipe_id, "needs")
+    pairs_with_ids = get_authored_relation_ids(recipe_id, "pairs_with")
     return templates.TemplateResponse(
-        request=request, name="recipe_edit.html", context={"recipe": recipe}
+        request=request, name="recipe_edit.html",
+        context={
+            "recipe": recipe, "book_recipes": book_recipes,
+            "needs_ids": needs_ids, "pairs_with_ids": pairs_with_ids,
+        }
     )
 
 
 @app.post("/recipes/{recipe_id}/edit")
-def edit_recipe(
+async def edit_recipe(
+    request: Request,
     recipe_id: int,
     title: str = Form(...),
     servings: str = Form(""),
@@ -715,7 +847,11 @@ def edit_recipe(
     flagged_for_review: str = Form(""),
     _: None = Depends(require_admin),
 ):
+    form = await request.form()
+    needs_ids = [int(v) for v in form.getlist("needs_ids") if v]
+    pairs_with_ids = [int(v) for v in form.getlist("pairs_with_ids") if v]
     update_recipe(recipe_id, title, servings, prep_time, cook_time, ingredients, instructions, notes, flagged_for_review)
+    set_recipe_relations(recipe_id, needs_ids, pairs_with_ids)
     return RedirectResponse(url=f"/recipes/{recipe_id}", status_code=303)
 
 
@@ -732,6 +868,7 @@ def approve_recipe(recipe_id: int, _: None = Depends(require_admin)):
 def delete_recipe(recipe_id: int, _: None = Depends(require_admin)):
     conn = sqlite3.connect("recipes.db")
     cursor = conn.cursor()
+    cursor.execute("DELETE FROM recipe_relations WHERE recipe_id = ? OR related_recipe_id = ?", (recipe_id, recipe_id))
     cursor.execute("DELETE FROM recipes WHERE id = ?", (recipe_id,))
     conn.commit()
     conn.close()
