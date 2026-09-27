@@ -6,7 +6,7 @@
 <table id="books-list" class="books-table">
     <thead>
         <tr>
-            {{ sort_th('filename', 'Filename') }}
+            {{ sort_th('filename', 'Book') }}
             {{ sort_th('status', 'Status') }}
             {{ sort_th('size', 'Size') }}
             {{ sort_th('scanned_at', 'Last updated') }}
@@ -16,7 +16,7 @@
     <tbody>
         {% for book in books %}
         <tr>
-            <td><a href="/books/view?path={{ book['path'] | urlencode }}" target="_blank" rel="noopener">{{ book["filename"] }}</a></td>
+            <td class="book-title-cell">{% include "book_title_author_display.html" %}</td>
             <td><span class="status-badge status-{{ book['status'] }}">{{ (book["status"] or "unknown").replace("_", " ") }}</span></td>
             <td>{{ "%.1f"|format(book["size_bytes"] / 1048576) if book["size_bytes"] else "—" }} MB</td>
             <td>{{ book["last_updated"] or "—" }}</td>

@@ -156,6 +156,28 @@ def init_recipes_extracted_column():
 init_recipes_extracted_column()
 
 
+def init_book_title_author_columns():
+    """Adds manually-settable 'title' and 'author' columns to inventory.sqlite,
+    so a book's display name doesn't have to rely on its (often messy,
+    '...toOCR'-suffixed) filename. NULL means "not set yet -- fall back to
+    the filename (and to parsing recipes.source_book for the author)", same
+    spirit as 'excluded' and 'recipes_extracted': a plain admin-set field,
+    never a computed one."""
+    conn = sqlite3.connect(INVENTORY_DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("PRAGMA table_info(inventory)")
+    existing_columns = {row[1] for row in cursor.fetchall()}
+    if "title" not in existing_columns:
+        conn.execute("ALTER TABLE inventory ADD COLUMN title TEXT")
+    if "author" not in existing_columns:
+        conn.execute("ALTER TABLE inventory ADD COLUMN author TEXT")
+    conn.commit()
+    conn.close()
+
+
+init_book_title_author_columns()
+
+
 def init_recipe_qc_table():
     """Same table the pipeline's recipe_qc.py creates -- initialized here
     too so the review queue and /qc-issues pages don't fail on a fresh
@@ -356,26 +378,71 @@ def get_distinct_source_books():
     return books
 
 
+def _build_inventory_title_author_lookup():
+    """Maps every path form a recipe's source_path might take (the original
+    inventory path, the OCR output path, or the compressed output path --
+    extract_recipes.py accepts any of the three as --pdf, so there's no one
+    fixed form) back to that book's manually-set (title, author) from
+    inventory.sqlite, a completely separate database from recipes.db (see
+    "The two databases" in ARCHITECTURE.md). Built once per call rather
+    than once per book -- ~700 rows, cheap either way -- so
+    get_books_with_authors() isn't doing a fresh cross-database query per
+    group."""
+    conn = sqlite3.connect(INVENTORY_DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT i.path, i.title, i.author,
+               o.output_path AS ocr_output_path,
+               c.output_path AS compressed_output_path
+        FROM inventory i
+        LEFT JOIN ocr_results o ON i.path = o.path
+        LEFT JOIN compress_results c ON c.path = COALESCE(o.output_path, i.path)
+    """)
+    lookup = {}
+    for row in cursor.fetchall():
+        info = {"title": row["title"], "author": row["author"]}
+        for path in (row["path"], row["ocr_output_path"], row["compressed_output_path"]):
+            if path:
+                lookup[path] = info
+    conn.close()
+    return lookup
+
+
 def get_books_with_authors():
-    """Approved recipes' distinct source books, split into (author, title)
-    for the reader-facing browse-by-author page. source_book is stored as
-    "Author - Title" by convention (see the --book-title flag in
-    extract_recipes.py/extract_recipes_local.py); a source_book with no
-    " - " separator falls back to author "Unknown" rather than failing to
-    display it."""
+    """Approved recipes' distinct source books, resolved to a (author,
+    title) pair for the reader-facing browse-by-author page. Prefers the
+    manually-set title/author from inventory.sqlite (see /books' "Edit"
+    button) when the recipe's source_path can be traced back to an
+    inventory row; falls back to parsing source_book's "Author - Title"
+    convention (see the --book-title flag in extract_recipes.py /
+    extract_recipes_local.py) per field when it can't -- older books, or
+    ones without a title/author set yet, still display exactly as before.
+    A source_book with no " - " separator and no inventory match falls
+    back to author "Unknown" rather than failing to display it."""
     conn = sqlite3.connect("recipes.db")
     cursor = conn.cursor()
-    cursor.execute(
-        "SELECT source_book, COUNT(*) FROM recipes WHERE status = 'approved' GROUP BY source_book"
-    )
+    cursor.execute("""
+        SELECT source_book, MIN(source_path), COUNT(*)
+        FROM recipes WHERE status = 'approved' GROUP BY source_book
+    """)
     rows = cursor.fetchall()
     conn.close()
+
+    inventory_lookup = _build_inventory_title_author_lookup()
+
     books = []
-    for source_book, recipe_count in rows:
+    for source_book, source_path, recipe_count in rows:
         if " - " in source_book:
-            author, title = source_book.split(" - ", 1)
+            parsed_author, parsed_title = source_book.split(" - ", 1)
         else:
-            author, title = "Unknown", source_book
+            parsed_author, parsed_title = "Unknown", source_book
+        inventory_info = inventory_lookup.get(source_path) if source_path else None
+        if inventory_info:
+            author = inventory_info["author"] or parsed_author
+            title = inventory_info["title"] or parsed_title
+        else:
+            author, title = parsed_author, parsed_title
         books.append({
             "author": author,
             "title": title,
@@ -555,6 +622,7 @@ def get_books(search_term: str = "", status_filter: str = "", recipes_filter: st
         SELECT * FROM (
             SELECT
                 i.path, i.filename, i.excluded, i.recipes_extracted,
+                i.title, i.author,
                 CASE
                     WHEN c.status = 'verified_ok' THEN c.compressed_bytes
                     ELSE i.size_bytes
@@ -610,6 +678,22 @@ def get_books(search_term: str = "", status_filter: str = "", recipes_filter: st
     books = cursor.fetchall()
     conn.close()
     return books
+
+
+def get_book_title_author(path: str):
+    """One inventory row's path/filename/title/author, for the edit-form
+    and display partials on /books. Deliberately a plain, un-joined lookup
+    -- those partials don't need status/size, just enough to render the
+    "title (falls back to filename) + author" display and pre-fill the
+    edit form."""
+    conn = sqlite3.connect(INVENTORY_DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute("SELECT path, filename, title, author FROM inventory WHERE path = ?", (path,))
+    row = cursor.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
 
 def get_book_status_counts(show_hidden: bool = False):
     conn = sqlite3.connect(INVENTORY_DB_PATH)
@@ -770,6 +854,40 @@ def mark_book_extracted(request: Request, path: str = Form(...), recipes_extract
     return templates.TemplateResponse(
         request=request, name="recipes_checkbox.html",
         context={"book": {"path": path, "recipes_extracted": value}}
+    )
+
+@app.get("/books/edit-title-author")
+def edit_book_title_author_form(request: Request, path: str, _: None = Depends(require_admin)):
+    book = get_book_title_author(path)
+    if book is None:
+        return Response(status_code=404)
+    return templates.TemplateResponse(
+        request=request, name="book_title_author_edit.html", context={"book": book}
+    )
+
+@app.get("/books/title-author-display")
+def book_title_author_display(request: Request, path: str, _: None = Depends(require_admin)):
+    book = get_book_title_author(path)
+    if book is None:
+        return Response(status_code=404)
+    return templates.TemplateResponse(
+        request=request, name="book_title_author_display.html", context={"book": book, "is_admin": True}
+    )
+
+@app.post("/books/set-title-author")
+def set_book_title_author(request: Request, path: str = Form(...), title: str = Form(""), author: str = Form(""), _: None = Depends(require_admin)):
+    conn = sqlite3.connect(INVENTORY_DB_PATH)
+    conn.execute(
+        "UPDATE inventory SET title = ?, author = ? WHERE path = ?",
+        (title.strip() or None, author.strip() or None, path),
+    )
+    conn.commit()
+    conn.close()
+    book = get_book_title_author(path)
+    if book is None:
+        return Response(status_code=404)
+    return templates.TemplateResponse(
+        request=request, name="book_title_author_display.html", context={"book": book, "is_admin": True}
     )
 
 @app.get("/books/view")

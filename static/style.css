@@ -302,6 +302,49 @@ form button[type="submit"]:hover { background: #626c40; }
 
 .books-table tr:last-child td { border-bottom: none; }
 
+.book-title-cell { min-width: 220px; }
+.book-author-line { font-size: 0.8rem; color: var(--brown-mid); margin-top: 0.15rem; }
+.edit-title-author-btn {
+    background: none;
+    border: none;
+    color: var(--brown-mid);
+    font-size: 0.75rem;
+    cursor: pointer;
+    padding: 0;
+    margin-left: 0.5rem;
+    text-decoration: underline;
+}
+.edit-title-author-btn:hover { color: var(--terracotta); }
+
+.book-title-author-form {
+    background: none;
+    border: none;
+    box-shadow: none;
+    padding: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    align-items: center;
+}
+.book-title-author-form input[type="text"] {
+    width: auto;
+    flex: 1;
+    min-width: 90px;
+    margin-top: 0;
+    padding: 0.3rem 0.5rem;
+    font-size: 0.82rem;
+}
+.book-title-author-form .btn-small {
+    padding: 0.3rem 0.6rem;
+    font-size: 0.78rem;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--olive);
+    color: #fff;
+    cursor: pointer;
+}
+.book-title-author-form .btn-small.btn-cancel { background: none; color: var(--brown-mid); }
+
 .author-groups { display: grid; gap: 1.5rem; }
 .author-group {
     background: var(--cream-card);

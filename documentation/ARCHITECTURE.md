@@ -92,7 +92,9 @@ Three tables:
   `status` (`readable_native` / `readable_via_calibre` / `needs_ocr` /
   `encrypted` / `unsupported` / `error` / `unsupported_extension`),
   `size_bytes`, `excluded` (1 = flagged "not a cookbook", hidden from the
-  app and skipped by OCR/compress).
+  app and skipped by OCR/compress), `title` / `author` (NULL until set by
+  hand via the "Edit" button on `/books` — never computed or extracted;
+  see "Book titles and authors, set by hand" below).
 - **`ocr_results`** — one row per file OCR'd. `path` matches
   `inventory.path`. `output_path` points into `cookbook_ocr_output`.
   `ocr_status` is `ocr_success_verified` / `ocr_ran_low_text` / `failed` /
@@ -125,7 +127,13 @@ itself). Four tables:
 - **`recipes`** — one row per extracted (or manually-added) recipe.
   Like `inventory.excluded`, its schema has grown by hand over time rather
   than through a single `CREATE TABLE` anywhere in code — nothing here
-  creates this table; it's just assumed to already exist. Columns in use:
+  creates this table; it's just assumed to already exist. `source_book`
+  is still the "Author - Title" string typed by hand at extraction time
+  (see the `--book-title` flag) — `get_books_with_authors()` (used by
+  `/authors`) now prefers the manually-set `inventory.title`/`.author`
+  over parsing this string, per field, when `source_path` can be traced
+  back to that book (see "Book titles and authors, set by hand" below);
+  `source_book` itself is untouched either way. Columns in use:
   `title`, `source_book`, `source_path`, `source_page` /
   `source_page_end`, `ingredients`, `instructions` (both newline-separated
   text, not JSON), `servings`, `prep_time`, `cook_time`, `notes`, `status`
@@ -344,6 +352,43 @@ gated behind `require_admin` (see "Admin access control" below) — so the
 underlying concern is now handled by the admin check rather than by
 leaving the feature unbuilt.
 
+## Book titles and authors, set by hand
+
+`inventory.title` and `inventory.author` (added 2026-09-27) let you set a
+book's real title and author from `/books` directly, rather than relying
+on its (often messy, `...toOCR`-suffixed) filename or on retyping
+`--book-title` correctly at extraction time. Both are plain admin-set
+fields, same spirit as `excluded` — NULL means "not set", nothing here
+infers or extracts a value.
+
+- `GET /books/edit-title-author?path=...` / `POST /books/set-title-author`
+  / `GET /books/title-author-display?path=...` back the inline
+  edit/save/cancel form on `/books` (`templates/book_title_author_edit.html`,
+  `templates/book_title_author_display.html`), htmx-swapped in place like
+  the existing checkbox controls. All three are gated behind
+  `require_admin` (see "Admin access control" below).
+- Setting only one of the two fields is fine — the other still falls back
+  to its old source (filename for title, the `source_book` parse for
+  author) wherever it's displayed.
+- **`/authors` is the harder consumer**, because it reads `recipes.db`,
+  a completely separate database from where `title`/`author` live (see
+  "The two databases" above), and there's no direct foreign key between a
+  `recipes` row and its `inventory` row — `recipes.source_path` could be
+  the original file, the OCR'd copy, or the compressed copy, depending on
+  which one happened to exist when extraction ran (`extract_recipes.py`
+  accepts any of the three as `--pdf`). `get_books_with_authors()` calls
+  `_build_inventory_title_author_lookup()` to build a one-time map from
+  every path form a book might go by — original, OCR output, compressed
+  output, chasing through `ocr_results`/`compress_results` the same way
+  `/books/view`'s fallback chain does — back to that book's `(title,
+  author)`. A resolved match wins per-field over the historical
+  "Author - Title" parse of `source_book`; no match (an older book, or
+  one that's had nothing set) leaves `/authors` displaying exactly as it
+  always did.
+- Deliberately doesn't feed back into extraction — `--book-title` is
+  still typed by hand each run. This only cleans up how a book is
+  *displayed* afterward, not how it's *extracted*.
+
 ## The web app
 
 - `main.py` connects directly to `~/cookbook-project/inventory.sqlite` for
@@ -409,9 +454,12 @@ How it works:
   (`Cf-Access-Jwt-Assertion`) instead of trusting the plain header.
 - Gated routes: `GET`/`POST /recipes/{id}/edit`, `POST
   /recipes/{id}/approve`, `DELETE /recipes/{id}`, `POST /books/exclude`,
-  `GET`/`POST /recipes/new` (adding a recipe by hand), and the `/review`
-  queue itself. Viewing a recipe that hasn't been approved yet
-  (`GET /recipes/{id}`) also 403s for non-admins, even via a direct link.
+  `GET`/`POST /recipes/new` (adding a recipe by hand), the `/review`
+  queue itself, and `GET /books/edit-title-author` / `GET
+  /books/title-author-display` / `POST /books/set-title-author` (see
+  "Book titles and authors, set by hand" above). Viewing a recipe that
+  hasn't been approved yet (`GET /recipes/{id}`) also 403s for
+  non-admins, even via a direct link.
 - Templates receive `is_admin` in their context and hide the
   corresponding buttons/links client-side — that's convenience, not the
   actual security boundary, which is the server-side `require_admin`

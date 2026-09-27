@@ -365,6 +365,36 @@ genuinely fresh clone and an isolated HOME directory this time, to avoid
 the same false confidence that let this slip through the first time.
 Tested and confirmed working.
 
+## Manually-set book title/author, and a precise /authors page
+
+Tony noticed the filename (often a messy `...toOCR`-suffixed original scan
+name) was the only thing standing in for a book's actual title and author
+on /books, and /authors had no better source than parsing "Author - Title"
+out of whatever got typed as `--book-title` at extraction time -- fragile,
+and only available once a book had actually been extracted. Added `title`
+and `author` columns to `inventory` (same self-migrating, admin-set-not-
+computed pattern as `excluded` and `recipes_extracted`), with an "Edit"
+button next to each book on /books swapping the row into an inline form
+via htmx, same style as the existing checkbox/exclude controls.
+
+The harder part was /authors, which reads `recipes.db`, an entirely
+separate database from where the new fields live. There's no direct link
+between a `recipes` row and its `inventory` row either -- extraction reads
+from whichever copy of a file existed at the time (original, OCR'd, or
+compressed), so `recipes.source_path` could be any one of the three.
+`get_books_with_authors()` now builds a lookup mapping every path form a
+book might have gone by back to its `inventory` row, and resolves through
+`ocr_results`/`compress_results` to find it regardless of which stage a
+recipe's `source_path` was captured at. When resolved, the manually-set
+title/author wins (falling back per-field, not all-or-nothing, so setting
+just one of the two still helps); when not -- an older book, or one
+without a title/author set yet -- /authors displays exactly as it did
+before, parsed from `source_book`. Deliberately left extraction itself
+untouched: `--book-title` is still typed by hand each run, this only
+cleans up what's displayed afterward. Tested with fixtures covering both
+the resolved and fallback paths, plus the OCR/compress path-chasing.
+Tested and confirmed working.
+
 ---
 
 *Still on the list, deliberately deferred: Tier 2 (the LLM-based semantic

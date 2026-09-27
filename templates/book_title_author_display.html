@@ -1,0 +1,8 @@
+<a href="/books/view?path={{ book['path'] | urlencode }}" target="_blank" rel="noopener">{{ book['title'] or book['filename'] }}</a>
+{% if book['author'] %}<div class="book-author-line">{{ book['author'] }}</div>{% endif %}
+{% if is_admin %}
+<button type="button" class="edit-title-author-btn"
+        hx-get="/books/edit-title-author?path={{ book['path'] | urlencode }}"
+        hx-target="closest .book-title-cell"
+        hx-swap="innerHTML">Edit</button>
+{% endif %}
