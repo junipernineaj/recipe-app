@@ -350,6 +350,21 @@ template file to reproduce the exact "half-committed feature" bug from
 earlier in this project, and the workflow failed as expected. Tested and
 confirmed working.
 
+## The first real GitHub Actions run immediately failed -- for a good reason
+
+The very first push after adding the workflow failed: importing main.py
+alone, before any route is even hit, adds a column to inventory.sqlite (a
+second database, entirely separate from recipes.db, that only the pipeline
+scripts and the /books route touch) -- and that database doesn't exist at
+all on a fresh GitHub checkout. Fixed ci_fixture_db.py to also build a
+minimal, empty inventory.sqlite (reusing the real table-creation functions
+from cookbook_inventory.py, ocr_pass.py, and compress_pass.py rather than
+re-declaring their schemas by hand) so importing main.py, and /books,
+both work the same way in CI as they do for real. Verified against a
+genuinely fresh clone and an isolated HOME directory this time, to avoid
+the same false confidence that let this slip through the first time.
+Tested and confirmed working.
+
 ---
 
 *Still on the list, deliberately deferred: Tier 2 (the LLM-based semantic
