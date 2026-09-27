@@ -222,6 +222,25 @@ recipe; a recipe that hasn't been through `recipe_qc.py` yet always sorts
 to the bottom under a QC sort, in either direction, since there's nothing
 to rank it by. Tested and confirmed working.
 
+## Linking related recipes: "needs" and "works well with"
+
+Tony pointed out that some chefs build a base sauce (a tomato sauce, say)
+and then use it inside another recipe -- a puttanesca is that same tomato
+sauce plus olives. He wanted a way to record that: a "needs X recipe"
+link for a recipe that's built from another, and a looser "works well
+with" link for recipes that just go well served together, each pointed
+at an existing recipe rather than free text.
+
+Added two multi-select dropdowns to the recipe edit page, both scoped to
+recipes sharing the same source book (a cross-book reference felt too
+fragile -- the other book might not even be approved yet). A recipe's own
+page now shows a "Related Recipes" section listing what it needs, what
+it's used as a base for (the reverse of "needs" -- e.g. the tomato sauce
+page lists the puttanesca that needs it), and what it works well with.
+"Works well with" only needs entering from one side -- it shows on both
+recipes' pages either way. Deleting a recipe cleans up any relations
+pointing to or from it. Tested and confirmed working.
+
 ---
 
 *Still on the list, deliberately deferred: Tier 2 (the LLM-based semantic
