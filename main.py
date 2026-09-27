@@ -239,7 +239,28 @@ def get_recipe_by_id(recipe_id: int):
     return recipe
 
 
-def get_pending_recipes():
+def _sort_pending_recipes(recipes, sort):
+    """Reorders the pending-review list per the requested sort. 'book_asc'
+    (the default) is already how the underlying query orders rows, so
+    it's a no-op; the others re-sort in place, relying on Python's stable
+    sort to keep the existing source_book/id ordering as a tiebreak.
+    Recipes with no QC checks recorded yet always sort last under a
+    QC-score sort, in either direction, since there's nothing to rank
+    them by until recipe_qc.py has actually run against them."""
+    if sort == "book_desc":
+        recipes.sort(key=lambda r: (r["source_book"] or "").lower(), reverse=True)
+    elif sort in ("qc_asc", "qc_desc"):
+        def qc_key(r):
+            total = r.get("qc_hard_total") or 0
+            if not total:
+                return (1, 0)
+            score = r["qc_hard_passed"] / total
+            return (0, -score if sort == "qc_desc" else score)
+        recipes.sort(key=qc_key)
+    return recipes
+
+
+def get_pending_recipes(sort: str = "book_asc"):
     conn = sqlite3.connect("recipes.db")
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
@@ -252,7 +273,7 @@ def get_pending_recipes():
     recipes = [dict(row) for row in cursor.fetchall()]
     recipes = _attach_qc_info(conn, recipes)
     conn.close()
-    return recipes
+    return _sort_pending_recipes(recipes, sort)
 
 
 def get_qc_failed_recipes():
@@ -495,10 +516,10 @@ def search(request: Request, q: str = "", book: str = ""):
     )
 
 @app.get("/review")
-def review_page(request: Request, _: None = Depends(require_admin)):
-    recipes = get_pending_recipes()
+def review_page(request: Request, sort: str = "book_asc", _: None = Depends(require_admin)):
+    recipes = get_pending_recipes(sort=sort)
     return templates.TemplateResponse(
-        request=request, name="review.html", context={"recipes": recipes, "is_admin": True}
+        request=request, name="review.html", context={"recipes": recipes, "is_admin": True, "sort": sort}
     )
 
 @app.get("/qc-issues")

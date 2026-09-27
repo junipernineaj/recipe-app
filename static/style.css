@@ -309,6 +309,9 @@ form button[type="submit"]:hover { background: #626c40; }
 
 .muted { color: var(--brown-mid); font-style: italic; }
 
+.review-sort-row { color: var(--brown-mid); font-size: 0.9rem; margin: 0 0 1rem; }
+.review-sort-row a { font-weight: 600; }
+
 .review-summary { color: var(--brown-mid); font-size: 0.9rem; margin: 1rem 0 0.5rem; }
 
 .review-list { list-style: none; margin: 0; padding: 0; }

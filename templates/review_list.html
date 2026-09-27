@@ -1,3 +1,12 @@
+{% macro sort_link(column, label) %}
+{% set next_sort = column ~ '_desc' if sort == column ~ '_asc' else column ~ '_asc' %}
+<a href="/review?sort={{ next_sort }}">{{ label }}{% if sort == column ~ '_asc' %} ▲{% elif sort == column ~ '_desc' %} ▼{% endif %}</a>
+{% endmacro %}
+
+<div class="review-sort-row">
+    Sort by: {{ sort_link('book', 'Book') }} &middot; {{ sort_link('qc', 'QC score') }}
+</div>
+
 <ul id="review-list">
     {% for recipe in recipes %}
     <li>
