@@ -294,6 +294,44 @@ falls back to an "Unknown" author rather than being dropped), with each
 book linking through to its own filtered recipe list. Tested and
 confirmed working.
 
+## Fixing the "Reviewed, OK" checkbox
+
+Tony reported the advisory-check acknowledgment checkbox wasn't sticking
+-- checking it looked like it worked, but a reload always showed it
+unchecked again. The recipe detail page had never loaded htmx.js, unlike
+every other page using `hx-post` forms, so the checkbox's `hx-*`
+attributes were silently inert: clicking it fell back to a plain,
+unconfigured form submission that just reloaded the page with a stray
+query string, never reaching the route that actually saves the flag.
+Fixed by adding the same htmx `<script>` tag every other page already
+has. Tested and confirmed working.
+
+## Outer-loop unit tests
+
+Off the back of that bug, Tony asked for a standing list of checks that
+should always pass after any change, rendered somewhere they can be
+checked both automatically and by hand. Added `site_checks.py`: nine
+read-only checks against the live site, covering things like every page
+using `hx-*` attributes actually loading htmx (the exact class of bug
+above), admin pages rejecting anonymous visitors and loading for admins,
+no orphaned foreign keys between recipes and their QC/relation/review
+rows, the QC backfill being current for every approved recipe, and the
+home and author pages' displayed numbers actually matching the database.
+Runs from the command line (so a cron job can call it) or from a new
+admin-only `/unit-tests` page with a "Run now" button, so the same checks
+serve as both the automatic and the manual check Tony wanted.
+
+## Catching a real bug on the very first run
+
+The first live run of the new checks immediately found something real:
+`delete_recipe()` cleaned up `recipe_relations` when removing a recipe,
+but never touched `recipe_qc_results` or `recipe_reviews`, so every
+recipe ever deleted had quietly left its QC history and reviews stranded
+in the database. Fixed the delete route to clean up all three tables
+together, and did a one-off cleanup of the 15 rows already orphaned in
+production. A quick, concrete payoff for having built the checks in the
+first place.
+
 ---
 
 *Still on the list, deliberately deferred: Tier 2 (the LLM-based semantic
