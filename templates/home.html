@@ -17,6 +17,7 @@
 </div>
             <h1>🍳 My Recipes</h1>
             <p class="tagline">A home for the recipes worth keeping</p>
+            <p class="stats-line">{{ recipes|length }} recipe{{ "s" if recipes|length != 1 else "" }} from {{ books|length }} book{{ "s" if books|length != 1 else "" }}</p>
         </div>
 
         <div class="actions-row">

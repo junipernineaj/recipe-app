@@ -14,6 +14,7 @@
 </div>
             <h1>⚠️ QC Issues</h1>
             <p class="tagline">Recipes that failed a hard quality check -- including ones already approved and live, surfaced by (re-)running recipe_qc.py</p>
+            <p class="stats-line">{{ recipes|length }} recipe{{ "s" if recipes|length != 1 else "" }} with unresolved QC issues -- technical debt from problematic OCR extracts</p>
         </div>
 
         <ul id="review-list">

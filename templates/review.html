@@ -15,6 +15,7 @@
 </div>
             <h1>🔍 Review Queue</h1>
             <p class="tagline">Pending extractions -- approve to make them visible on the main site</p>
+            <p class="stats-line">{{ recipes|length }} recipe{{ "s" if recipes|length != 1 else "" }} waiting for review -- not yet visible to readers</p>
         </div>
 
         {% include "review_list.html" %}
