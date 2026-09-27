@@ -292,6 +292,27 @@ form button[type="submit"]:hover { background: #626c40; }
 
 .books-table tr:last-child td { border-bottom: none; }
 
+.author-groups { display: grid; gap: 1.5rem; }
+.author-group {
+    background: var(--cream-card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1rem 1.25rem;
+    box-shadow: var(--shadow);
+}
+.author-name { font-size: 1.1rem; color: var(--terracotta-dark); margin-bottom: 0.5rem; }
+.author-books { list-style: none; margin: 0; padding: 0; }
+.author-books li {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.4rem 0;
+    border-bottom: 1px dashed var(--border);
+}
+.author-books li:last-child { border-bottom: none; }
+.author-books a { font-weight: 600; }
+.book-recipe-count { font-size: 0.8rem; color: var(--brown-mid); flex-shrink: 0; margin-left: 1rem; }
+
 .recipes-checkbox-form {
     margin-bottom: 0.4rem;
 }

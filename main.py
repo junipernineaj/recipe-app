@@ -356,6 +356,36 @@ def get_distinct_source_books():
     return books
 
 
+def get_books_with_authors():
+    """Approved recipes' distinct source books, split into (author, title)
+    for the reader-facing browse-by-author page. source_book is stored as
+    "Author - Title" by convention (see the --book-title flag in
+    extract_recipes.py/extract_recipes_local.py); a source_book with no
+    " - " separator falls back to author "Unknown" rather than failing to
+    display it."""
+    conn = sqlite3.connect("recipes.db")
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT source_book, COUNT(*) FROM recipes WHERE status = 'approved' GROUP BY source_book"
+    )
+    rows = cursor.fetchall()
+    conn.close()
+    books = []
+    for source_book, recipe_count in rows:
+        if " - " in source_book:
+            author, title = source_book.split(" - ", 1)
+        else:
+            author, title = "Unknown", source_book
+        books.append({
+            "author": author,
+            "title": title,
+            "source_book": source_book,
+            "recipe_count": recipe_count,
+        })
+    books.sort(key=lambda b: (b["author"].lower(), b["title"].lower()))
+    return books
+
+
 def get_recipe_by_id(recipe_id: int):
     conn = sqlite3.connect("recipes.db")
     conn.row_factory = sqlite3.Row
@@ -640,6 +670,15 @@ def search(request: Request, q: str = "", book: str = ""):
     recipes = get_recipes(q, book)
     return templates.TemplateResponse(
         request=request, name="recipe_list.html", context={"recipes": recipes, "is_admin": is_admin(request)}
+    )
+
+
+@app.get("/authors")
+def authors_page(request: Request):
+    books = get_books_with_authors()
+    return templates.TemplateResponse(
+        request=request, name="authors.html",
+        context={"books": books, "is_admin": is_admin(request)}
     )
 
 @app.get("/review")
