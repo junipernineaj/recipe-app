@@ -549,6 +549,30 @@ How it works:
   access control" above is only a real possibility from the home LAN
   directly, not from the public URL.
 
+## Running recipe QC checks
+
+`pipeline/recipe_qc.py` is what populates `recipe_qc_results` (see "The
+two databases" above for the seven checks themselves). `extract_recipes.py`
+and `extract_recipes_local.py` already call it automatically on every
+newly-extracted recipe, so most of the time nothing needs to be run by
+hand — this script is for backfilling recipes that predate a check, or
+for re-running after a check's logic changes. Needs no venv at all (just
+`argparse`/`re`/`sqlite3`, no third-party dependencies), so plain
+`python3` works from anywhere as long as `--db` points at the real file:
+
+```
+# Every recipe in the database
+python3 pipeline/recipe_qc.py --db ~/recipe-app/recipes.db
+
+# Just one book — --book matches source_book EXACTLY (case and
+# punctuation included); if you're not sure of the exact string:
+#   sqlite3 ~/recipe-app/recipes.db "SELECT DISTINCT source_book FROM recipes;"
+python3 pipeline/recipe_qc.py --db ~/recipe-app/recipes.db --book "Nigella Lawson - Feast"
+
+# Just one recipe, e.g. right after a manual edit
+python3 pipeline/recipe_qc.py --db ~/recipe-app/recipes.db --recipe-id 42
+```
+
 ## Continuous integration
 
 As of 2026-09-27, `.github/workflows/site-checks.yml` runs
