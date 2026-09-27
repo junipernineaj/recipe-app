@@ -306,6 +306,59 @@ the pipeline scripts moving into this repo, so double check its `cd`
 target and venv path match `~/recipe-app/pipeline` and
 `~/cookbook-project/venv` before relying on it.
 
+### Finding and removing exact-duplicate books
+
+Two small, standalone utilities in `pipeline/` for when the same book
+ends up registered twice in `inventory` — not part of the regular
+pipeline flow above, just there for whenever it's needed again.
+
+- **`find_duplicate_books.py`** — resolves each book to the same file
+  `/books/view` would actually serve (compressed, if `verified_ok` →
+  OCR'd → the raw original) and hashes it, then reports every group of
+  books whose resolved files are byte-identical. Read-only — it never
+  changes anything, it just prints (or `--csv`-exports) the groups it
+  finds, tier by tier (`compressed`/`ocr`/`original`), for you to decide
+  what to do with. Deliberately exact-match only (zero false positives,
+  at the cost of missing near-duplicates like a book re-scanned from a
+  different physical copy).
+
+  ```
+  python3 pipeline/find_duplicate_books.py
+  python3 pipeline/find_duplicate_books.py --csv duplicate_books_report.csv
+  python3 pipeline/find_duplicate_books.py --include-excluded
+  ```
+
+- **`remove_books_by_path_prefix.py`** — removes every `inventory` row
+  under a given folder prefix, along with its `ocr_results` and
+  `compress_results` rows (walking the same original → OCR output →
+  compressed output chain, so it doesn't leave the kind of ghost rows
+  `prune_ghosts.py` was written to clean up). Written for the 2026-09
+  incident below, but generic — reusable for any similar accidental
+  re-scan of a subfolder. Safe by default: with no flags it only
+  *reports* what it would delete; nothing touches the database until
+  `--apply`, and files on disk are only ever removed with
+  `--apply --delete-files` together, and even then only the OCR'd/
+  compressed copies, never the original. Doesn't touch `recipes.db` —
+  see "The two databases" above for why that's fine.
+
+  ```
+  python3 pipeline/remove_books_by_path_prefix.py "/media/aj9/Juniper13/Books/Cookbooks/Keeping/"
+  python3 pipeline/remove_books_by_path_prefix.py "/media/aj9/Juniper13/Books/Cookbooks/Keeping/" --apply
+  python3 pipeline/remove_books_by_path_prefix.py "/media/aj9/Juniper13/Books/Cookbooks/Keeping/" --apply --delete-files
+  ```
+
+  **The incident these were built for (2026-09-27):** a `Keeping`
+  subfolder accidentally created directly under the `Cookbooks` source
+  directory got picked up by `cookbook_inventory.py` as a second,
+  separate set of books, even though every file in it was already
+  registered under the folder above it — so each one got OCR'd and
+  compressed all over again under a new `inventory.path`, showing up on
+  `/books` as an exact duplicate of a book already in the library. The
+  `Keeping` folder itself was gone by the time this was diagnosed;
+  `find_duplicate_books.py` is what surfaced the pattern (a cluster of
+  hash-identical books), and `remove_books_by_path_prefix.py` cleaned up
+  the leftover rows once the folder's former path was known.
+
 ## Diagnosing a stuck/broken file
 
 When something in this pipeline fails, this is roughly the order that's
