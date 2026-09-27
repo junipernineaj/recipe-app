@@ -25,7 +25,7 @@
                         {{ recipe["source_book"] }}{% if recipe["engine"] %} &middot; {{ recipe["engine"] }}{% endif %}
                         {% if recipe["status"] != "approved" %} &middot; pending review{% endif %}
                     </span>
-                    <span class="qc-badge qc-fail">QC: {{ recipe['qc_hard_passed'] }}/{{ recipe['qc_hard_total'] }} hard checks passed</span>
+                    <span class="qc-badge {% if recipe['qc_passed'] < recipe['qc_total'] %}qc-fail{% else %}qc-pass{% endif %}">QC: {{ recipe['qc_passed'] }}/{{ recipe['qc_total'] }}</span>
                     {% for c in recipe.get("qc_failed", []) %}
                     <p class="flag-note qc-note qc-{{ c['severity'] }}">&#9888; [{{ c['check_name'] }}] {{ c['detail'] }}</p>
                     {% endfor %}

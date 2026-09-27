@@ -64,6 +64,14 @@ def init_qc_table(conn):
             PRIMARY KEY (recipe_id, check_name)
         )
     """)
+    # Added later: lets a failed ADVISORY check be manually ticked off as
+    # reviewed (a false positive, confirmed by eye) via a checkbox on the
+    # recipe page, without it silently reappearing on the next backfill --
+    # see the ON CONFLICT clause in run_checks() below for how this is
+    # preserved or reset whenever a check is re-run.
+    existing_columns = {row[1] for row in conn.execute("PRAGMA table_info(recipe_qc_results)")}
+    if "acknowledged" not in existing_columns:
+        conn.execute("ALTER TABLE recipe_qc_results ADD COLUMN acknowledged INTEGER NOT NULL DEFAULT 0")
     conn.commit()
 
 
@@ -255,11 +263,16 @@ def run_checks(conn, recipe_id: int, word_corpus=None):
         else:
             passed, detail = fn(ingredients, instructions, flagged_for_review)
         conn.execute("""
-            INSERT INTO recipe_qc_results (recipe_id, check_name, passed, severity, detail, checked_at)
-            VALUES (?, ?, ?, ?, ?, datetime('now'))
+            INSERT INTO recipe_qc_results (recipe_id, check_name, passed, severity, detail, checked_at, acknowledged)
+            VALUES (?, ?, ?, ?, ?, datetime('now'), 0)
             ON CONFLICT(recipe_id, check_name) DO UPDATE SET
                 passed = excluded.passed, severity = excluded.severity,
-                detail = excluded.detail, checked_at = excluded.checked_at
+                detail = excluded.detail, checked_at = excluded.checked_at,
+                acknowledged = CASE
+                    WHEN excluded.passed = 1 THEN 0
+                    WHEN recipe_qc_results.detail IS excluded.detail THEN recipe_qc_results.acknowledged
+                    ELSE 0
+                END
         """, (recipe_id, name, int(passed), severity, detail))
         results.append((name, severity, passed, detail))
     conn.commit()

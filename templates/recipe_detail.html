@@ -36,13 +36,13 @@
             <h2>QC Checks</h2>
             <table class="qc-table">
                 <thead>
-                    <tr><th></th><th>Check</th><th>Detail</th></tr>
+                    <tr><th></th><th>Check</th><th>Detail</th><th>Reviewed</th></tr>
                 </thead>
                 <tbody>
                     {% for c in qc_results %}
                     <tr>
                         <td class="qc-icon">
-                            {% if c["passed"] %}
+                            {% if c["passed"] or c["acknowledged"] %}
                             <span class="qc-tick qc-tick-pass">&#10003;</span>
                             {% else %}
                             <span class="qc-tick qc-tick-fail">&#10007;</span>
@@ -53,6 +53,11 @@
                             {% if c["severity"] == "advisory" %}<span class="qc-severity-tag">advisory</span>{% endif %}
                         </td>
                         <td>{{ c["detail"] or "—" }}</td>
+                        <td class="qc-ack-cell">
+                            {% if c["severity"] == "advisory" and not c["passed"] %}
+                            {% include "qc_ack_checkbox.html" %}
+                            {% endif %}
+                        </td>
                     </tr>
                     {% endfor %}
                 </tbody>

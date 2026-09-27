@@ -16,9 +16,9 @@
             {% if recipe["flagged_for_review"] %}
             <p class="flag-note">&#9888; {{ recipe["flagged_for_review"] }}</p>
             {% endif %}
-            {% if recipe.get("qc_hard_total") %}
-            <span class="qc-badge {% if recipe['qc_hard_passed'] < recipe['qc_hard_total'] %}qc-fail{% else %}qc-pass{% endif %}">
-                QC: {{ recipe['qc_hard_passed'] }}/{{ recipe['qc_hard_total'] }}
+            {% if recipe.get("qc_total") %}
+            <span class="qc-badge {% if recipe['qc_passed'] < recipe['qc_total'] %}qc-fail{% else %}qc-pass{% endif %}">
+                QC: {{ recipe['qc_passed'] }}/{{ recipe['qc_total'] }}
             </span>
             {% endif %}
             {% for c in recipe.get("qc_failed", []) %}

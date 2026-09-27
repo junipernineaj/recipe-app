@@ -1,0 +1,12 @@
+<form
+    hx-post="/recipes/{{ recipe['id'] }}/qc/{{ c['check_name'] }}/ack"
+    hx-target="this"
+    hx-swap="outerHTML"
+    class="recipes-checkbox-form">
+    <label class="recipes-checkbox-label">
+        <input type="checkbox" name="acknowledged" value="1"
+               {% if c['acknowledged'] %}checked{% endif %}
+               onchange="this.form.requestSubmit()">
+        Reviewed, OK
+    </label>
+</form>

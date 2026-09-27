@@ -294,17 +294,21 @@ def set_recipe_relations(recipe_id, needs_ids, pairs_with_ids):
 
 def _attach_qc_info(conn, recipes: list[dict]) -> list[dict]:
     """Fetches every recorded QC check for the given recipes (as plain
-    dicts, id keyed) and annotates each with qc_hard_total/qc_hard_passed
-    (a quick "3/4 checks passed" summary) and qc_failed (the individual
-    failed checks, hard or advisory, with their detail text) -- used by
-    both the pending review queue and the /qc-issues page."""
+    dicts, id keyed) and annotates each with qc_total/qc_passed (a quick
+    "5/7 checks passed" summary, across every check -- hard and advisory
+    alike) and qc_failed (the individual still-failing checks, with their
+    detail text) -- used by both the pending review queue and the
+    /qc-issues page. A failed ADVISORY check that's been manually
+    acknowledged (the "Reviewed, OK" checkbox on the recipe page) counts
+    as passed here and is left out of qc_failed, same as a check that
+    never failed in the first place."""
     if not recipes:
         return recipes
     ids = [r["id"] for r in recipes]
     placeholders = ",".join("?" * len(ids))
     cursor = conn.cursor()
     cursor.execute(
-        f"SELECT recipe_id, check_name, severity, passed, detail FROM recipe_qc_results WHERE recipe_id IN ({placeholders})",
+        f"SELECT recipe_id, check_name, severity, passed, detail, acknowledged FROM recipe_qc_results WHERE recipe_id IN ({placeholders})",
         ids,
     )
     by_recipe: dict = {}
@@ -313,9 +317,9 @@ def _attach_qc_info(conn, recipes: list[dict]) -> list[dict]:
 
     for r in recipes:
         checks = by_recipe.get(r["id"], [])
-        r["qc_hard_total"] = sum(1 for c in checks if c["severity"] == "hard")
-        r["qc_hard_passed"] = sum(1 for c in checks if c["severity"] == "hard" and c["passed"])
-        r["qc_failed"] = [c for c in checks if not c["passed"]]
+        r["qc_total"] = len(checks)
+        r["qc_passed"] = sum(1 for c in checks if c["passed"] or c["acknowledged"])
+        r["qc_failed"] = [c for c in checks if not c["passed"] and not c["acknowledged"]]
     return recipes
 
 
@@ -374,10 +378,10 @@ def _sort_pending_recipes(recipes, sort):
         recipes.sort(key=lambda r: (r["source_book"] or "").lower(), reverse=True)
     elif sort in ("qc_asc", "qc_desc"):
         def qc_key(r):
-            total = r.get("qc_hard_total") or 0
+            total = r.get("qc_total") or 0
             if not total:
                 return (1, 0)
-            score = r["qc_hard_passed"] / total
+            score = r["qc_passed"] / total
             return (0, -score if sort == "qc_desc" else score)
         recipes.sort(key=qc_key)
     return recipes
@@ -430,7 +434,7 @@ def get_qc_results_for_recipe(recipe_id: int):
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT check_name, severity, passed, detail FROM recipe_qc_results WHERE recipe_id = ?",
+        "SELECT check_name, severity, passed, detail, acknowledged FROM recipe_qc_results WHERE recipe_id = ?",
         (recipe_id,),
     )
     by_name = {row["check_name"]: dict(row) for row in cursor.fetchall()}
@@ -853,6 +857,30 @@ async def edit_recipe(
     update_recipe(recipe_id, title, servings, prep_time, cook_time, ingredients, instructions, notes, flagged_for_review)
     set_recipe_relations(recipe_id, needs_ids, pairs_with_ids)
     return RedirectResponse(url=f"/recipes/{recipe_id}", status_code=303)
+
+
+@app.post("/recipes/{recipe_id}/qc/{check_name}/ack")
+def ack_qc_check(request: Request, recipe_id: int, check_name: str, acknowledged: str = Form(""), _: None = Depends(require_admin)):
+    """Toggled by the "Reviewed, OK" checkbox next to a failed ADVISORY QC
+    check on the recipe page -- lets you confirm a heuristic false
+    positive (you've looked at it and it's fine) without having to edit
+    the recipe itself. The severity = 'advisory' clause below means this
+    can never silently wave away a hard check failure, even from a
+    hand-crafted request -- a hard check only ever clears by actually
+    fixing the recipe. See run_checks() in pipeline/recipe_qc.py for how
+    this flag is preserved or reset the next time QC is re-run."""
+    value = 1 if acknowledged else 0
+    conn = sqlite3.connect("recipes.db")
+    conn.execute(
+        "UPDATE recipe_qc_results SET acknowledged = ? WHERE recipe_id = ? AND check_name = ? AND severity = 'advisory'",
+        (value, recipe_id, check_name),
+    )
+    conn.commit()
+    conn.close()
+    return templates.TemplateResponse(
+        request=request, name="qc_ack_checkbox.html",
+        context={"recipe": {"id": recipe_id}, "c": {"check_name": check_name, "acknowledged": value}}
+    )
 
 
 @app.post("/recipes/{recipe_id}/approve")
