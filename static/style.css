@@ -154,6 +154,16 @@ a:hover { text-decoration: underline; }
     margin-left: 0.35rem;
 }
 
+.unit-tests-summary {
+    display: inline-block;
+    font-weight: 700;
+    padding: 0.3rem 0.8rem;
+    border-radius: 999px;
+    font-size: 0.95rem;
+}
+.unit-tests-summary.unit-tests-pass { background: rgba(122, 132, 80, 0.15); color: var(--olive); }
+.unit-tests-summary.unit-tests-fail { background: rgba(193, 80, 46, 0.12); color: var(--terracotta-dark); }
+
 .delete-btn {
     background: none;
     border: 1px solid var(--border);

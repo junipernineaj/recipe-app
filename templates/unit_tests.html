@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Unit Tests - My Recipes</title>
+    <link rel="stylesheet" href="/static/style.css?v=5">
+</head>
+<body>
+    <div class="container">
+        <div class="site-header">
+<div class="site-nav">
+    <a href="/">🍳 Back to recipes</a>
+    <a href="/books">📚 View book library</a>
+    <a href="/review">🔍 Review queue</a>
+    <a href="/qc-issues">⚠️ QC issues</a>
+</div>
+            <h1>🧪 Unit Tests</h1>
+            <p class="tagline">Outer-loop checks against the live site -- run these after every change</p>
+        </div>
+
+        {% if results is none %}
+        <p class="muted">No results yet -- run the checks at least once to see them here.</p>
+        <form method="post" action="/unit-tests/run">
+            <button type="submit" class="btn">Run now</button>
+        </form>
+        {% else %}
+        <div class="actions-row">
+            <span class="unit-tests-summary {% if failed_count %}unit-tests-fail{% else %}unit-tests-pass{% endif %}">
+                {{ passed_count }}/{{ total_count }} unit tests passed
+            </span>
+            <span class="muted">last run {{ ran_at }}</span>
+        </div>
+
+        <form method="post" action="/unit-tests/run" style="margin-bottom: 1.5rem; padding: 1rem;">
+            <button type="submit" class="btn">Run now</button>
+        </form>
+
+        <table class="qc-table">
+            <thead>
+                <tr><th></th><th>Check</th><th>Detail</th></tr>
+            </thead>
+            <tbody>
+                {% for r in results %}
+                <tr>
+                    <td class="qc-icon">
+                        {% if r["passed"] %}
+                        <span class="qc-tick qc-tick-pass">&#10003;</span>
+                        {% else %}
+                        <span class="qc-tick qc-tick-fail">&#10007;</span>
+                        {% endif %}
+                    </td>
+                    <td>{{ r["name"] | replace("_", " ") | capitalize }}</td>
+                    <td>{{ r["detail"] or "—" }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% endif %}
+    </div>
+</body>
+</html>

@@ -9,3 +9,4 @@ recipes.db
 *.sqlite
 *.log
 pipeline/inventory.csv
+site_check_results.json
