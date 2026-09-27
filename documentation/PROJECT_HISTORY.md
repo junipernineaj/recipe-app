@@ -332,6 +332,24 @@ together, and did a one-off cleanup of the 15 rows already orphaned in
 production. A quick, concrete payoff for having built the checks in the
 first place.
 
+## Running the app-level checks automatically on every push
+
+Tony's wife suggested GitHub Actions; the data-dependent checks in
+site_checks.py (orphaned rows, QC backfill, live counts) still need the
+real ~700-book library, which only exists on the home server, so those
+keep running via cron and /unit-tests there. But the app/code-level
+checks -- routes loading, admin gating, htmx wired up, static assets
+intact -- don't need real data at all. Added requirements.txt (this
+project never had one), ci_fixture_db.py (builds a small throwaway
+recipes.db with one seeded, fully-QC'd recipe, so every check has
+something real to exercise instead of failing on a missing table), and a
+.github/workflows/site-checks.yml workflow that installs dependencies,
+builds the fixture, and runs site_checks.py on every push and pull
+request. Verified it actually catches something: deliberately removed a
+template file to reproduce the exact "half-committed feature" bug from
+earlier in this project, and the workflow failed as expected. Tested and
+confirmed working.
+
 ---
 
 *Still on the list, deliberately deferred: Tier 2 (the LLM-based semantic

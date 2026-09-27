@@ -1,0 +1,37 @@
+name: Site checks
+
+# Runs the outer-loop checks in site_checks.py against a small throwaway
+# fixture database on every push and pull request. This can only exercise
+# the app/code-level checks (routes load, admin gating works, htmx is
+# wired up, static assets are intact) -- it has no access to the real
+# ~700-book library, which only exists on the home server, so the checks
+# that matter most for catching *data* problems (orphaned rows, stale QC
+# backfills, live counts) still run for real there, via cron and the
+# /unit-tests admin page. This workflow exists to catch the other kind of
+# bug: something that broke the app itself before it ever reaches the
+# server, like a page referencing a template that never got committed.
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  site-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Build throwaway fixture database
+        run: python3 ci_fixture_db.py
+
+      - name: Run site checks
+        env:
+          ADMIN_EMAILS: ci-admin@example.com
+        run: python3 site_checks.py

@@ -1,0 +1,11 @@
+# Runtime dependencies for the web app (main.py) and the outer-loop checks
+# (site_checks.py). Versions are lower bounds, not exact pins -- these are
+# the versions this project has actually been built and tested against, but
+# newer compatible releases are fine too. This file exists mainly so CI has
+# something to install from; it doesn't need to match ~/recipe-app/venv on
+# the server exactly, though it's worth keeping them roughly in sync.
+fastapi>=0.141
+uvicorn>=0.46
+jinja2>=3.1
+python-multipart>=0.0.26
+httpx>=0.28
