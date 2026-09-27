@@ -241,6 +241,59 @@ page lists the puttanesca that needs it), and what it works well with.
 recipes' pages either way. Deleting a recipe cleans up any relations
 pointing to or from it. Tested and confirmed working.
 
+## Catching OCR artifacts with a corpus-frequency check
+
+Tony noticed the word "Ye" turning up in ingredient lists -- not
+something a dictionary would catch, since it's genuine (if archaic)
+English, but almost always a garbled fraction glyph in practice. Rather
+than reach for an English dictionary, which would happily pass a
+real-but-wrong word like that, the new `unusual_words` check instead uses
+the recipe library itself: any word appearing in a recipe's ingredients
+or instructions that turns up in zero *other* recipes anywhere in the
+whole library gets flagged as advisory, on the theory that a word this
+library has never used anywhere else is a far more reliable tell that
+something got garbled than whether it happens to be "real" English.
+Tested and confirmed working.
+
+## Reflecting every QC check, and a way to manually clear advisory flags
+
+With `unusual_words` bringing the total to seven checks, Tony pointed out
+that the QC badge shown around the app was still only counting the five
+hard checks -- by original design, to avoid the score being diluted by
+heuristic advisory false positives -- and asked for two changes: show all
+seven checks in every QC score/badge, and give advisory checks (only
+advisory -- hard checks stay non-dismissible) a "Reviewed, OK" checkbox
+so a human glance that confirms a flagged word or detail is genuinely
+fine can clear it, without a future backfill run just re-flagging the
+same thing again. An acknowledgment resets automatically if the
+underlying detail text changes or the check starts passing outright, so
+it only ever suppresses a flag that's still describing the exact same
+thing someone already looked at. Tested and confirmed working.
+
+## Backlog and library-size counts
+
+Tony wanted a running reminder, visible at a glance, of how much is still
+outstanding: a recipe count at the top of the QC Issues page (a nudge
+about the technical debt of persisting problematic OCR extracts instead
+of clearing them), a recipe count at the top of the Review Queue (a
+reminder of recipes not yet visible to readers), and a recipe count plus
+unique-book count on the main recipes page itself, visible to readers and
+admin alike. All three needed no backend changes -- the underlying data
+(`recipes` and the distinct-book list) was already flowing into each
+page's template. Tested and confirmed working.
+
+## Browsing the library by author
+
+Thinking about the reader's experience rather than the admin's, Tony
+suggested a page listing each book together with its author, since every
+book is already named "Author - Title" in `source_book` by convention.
+Added a new "Browse by author" page, reachable from the home page nav,
+that groups every book with at least one approved recipe under its
+author's name (a `source_book` that doesn't follow the naming convention
+falls back to an "Unknown" author rather than being dropped), with each
+book linking through to its own filtered recipe list. Tested and
+confirmed working.
+
 ---
 
 *Still on the list, deliberately deferred: Tier 2 (the LLM-based semantic
