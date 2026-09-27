@@ -695,6 +695,40 @@ def qc_issues_page(request: Request, _: None = Depends(require_admin)):
         request=request, name="qc_issues.html", context={"recipes": recipes, "is_admin": True}
     )
 
+
+@app.get("/unit-tests")
+def unit_tests_page(request: Request, _: None = Depends(require_admin)):
+    # Imported here rather than at module load time: site_checks.py imports
+    # this module back (it needs the FastAPI app to test it), so importing
+    # it up front would be a circular import at server startup. By the time
+    # a request actually reaches this route, main.py has long finished
+    # loading, so there's nothing circular about it any more.
+    import site_checks
+    summary = site_checks.load_results()
+    if summary is None:
+        return templates.TemplateResponse(
+            request=request, name="unit_tests.html",
+            context={"results": None, "is_admin": True}
+        )
+    results = summary["results"]
+    passed_count = sum(1 for r in results if r["passed"])
+    return templates.TemplateResponse(
+        request=request, name="unit_tests.html",
+        context={
+            "results": results, "ran_at": summary["ran_at"],
+            "passed_count": passed_count, "total_count": len(results),
+            "failed_count": len(results) - passed_count, "is_admin": True,
+        }
+    )
+
+
+@app.post("/unit-tests/run")
+def run_unit_tests(_: None = Depends(require_admin)):
+    import site_checks
+    summary = site_checks.run_all()
+    site_checks.save_results(summary)
+    return RedirectResponse(url="/unit-tests", status_code=303)
+
 @app.get("/books")
 def books_page(request: Request, sort: str = "filename_asc", show_hidden: bool = False):
     books = get_books(sort=sort, show_hidden=show_hidden)
