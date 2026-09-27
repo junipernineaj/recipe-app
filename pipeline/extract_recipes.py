@@ -46,6 +46,8 @@ import sys
 import time
 from pathlib import Path
 
+from recipe_qc import init_qc_table, run_checks
+
 try:
     from tqdm import tqdm
 except ImportError:
@@ -348,7 +350,7 @@ def insert_recipe(conn, recipe, book_title, source_path, page_start, page_end, e
         note = f"Extraction returned no {missing} for this recipe -- check the source page and fill in by hand or reject."
         flagged_for_review = f"{flagged_for_review} {note}" if flagged_for_review else note
 
-    conn.execute("""
+    cursor = conn.execute("""
         INSERT INTO recipes
             (title, source_book, source_path, source_page, source_page_end,
              ingredients, instructions, servings, prep_time, cook_time,
@@ -369,6 +371,7 @@ def insert_recipe(conn, recipe, book_title, source_path, page_start, page_end, e
         flagged_for_review,
         engine,
     ))
+    return cursor.lastrowid
 
 
 def main():
@@ -388,6 +391,7 @@ def main():
         sys.exit(1)
 
     conn = init_db(Path(args.db).expanduser())
+    init_qc_table(conn)
     client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY from the environment
 
     print(f"Extracting text from {pdf_path.name} ...")
@@ -415,7 +419,8 @@ def main():
                   f"than inserting as recipes", file=sys.stderr)
             recipes = []
         for recipe in recipes:
-            insert_recipe(conn, recipe, args.book_title, source_path, page_start, page_end)
+            recipe_id = insert_recipe(conn, recipe, args.book_title, source_path, page_start, page_end)
+            run_checks(conn, recipe_id)
 
         conn.execute("""
             INSERT INTO extraction_log

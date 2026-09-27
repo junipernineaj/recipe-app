@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>QC Issues - My Recipes</title>
+    <link rel="stylesheet" href="/static/style.css?v=5">
+</head>
+<body>
+    <div class="container">
+        <div class="site-header">
+<div class="site-nav">
+    <a href="/">🍳 Back to recipes</a>
+    <a href="/books">📚 View book library</a>
+    <a href="/review">🔍 Review queue</a>
+</div>
+            <h1>⚠️ QC Issues</h1>
+            <p class="tagline">Recipes that failed a hard quality check -- including ones already approved and live, surfaced by (re-)running recipe_qc.py</p>
+        </div>
+
+        <ul id="review-list">
+            {% for recipe in recipes %}
+            <li>
+                <div class="recipe-info">
+                    <a href="/recipes/{{ recipe['id'] }}">{{ recipe["title"] | titlecase }}</a>
+                    <span class="source">
+                        {{ recipe["source_book"] }}{% if recipe["engine"] %} &middot; {{ recipe["engine"] }}{% endif %}
+                        {% if recipe["status"] != "approved" %} &middot; pending review{% endif %}
+                    </span>
+                    <span class="qc-badge qc-fail">QC: {{ recipe['qc_hard_passed'] }}/{{ recipe['qc_hard_total'] }} hard checks passed</span>
+                    {% for c in recipe.get("qc_failed", []) %}
+                    <p class="flag-note qc-note qc-{{ c['severity'] }}">&#9888; [{{ c['check_name'] }}] {{ c['detail'] }}</p>
+                    {% endfor %}
+                </div>
+                <a href="/recipes/{{ recipe['id'] }}/edit" class="btn">Edit</a>
+            </li>
+            {% else %}
+            <li class="empty-state">No hard QC failures right now. 🎉</li>
+            {% endfor %}
+        </ul>
+    </div>
+</body>
+</html>

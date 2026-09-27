@@ -2,6 +2,8 @@ import os
 import re
 import sqlite3
 from fastapi import FastAPI, Request, Form, Response, HTTPException, Depends
+
+from pipeline.recipe_qc import init_qc_table as _init_recipe_qc_table, CHECKS as _QC_CHECKS
 from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
@@ -154,6 +156,46 @@ def init_recipes_extracted_column():
 init_recipes_extracted_column()
 
 
+def init_recipe_qc_table():
+    """Same table the pipeline's recipe_qc.py creates -- initialized here
+    too so the review queue and /qc-issues pages don't fail on a fresh
+    recipes.db that hasn't had a pipeline run (or a QC backfill) against
+    it yet."""
+    conn = sqlite3.connect("recipes.db")
+    _init_recipe_qc_table(conn)
+    conn.close()
+
+
+init_recipe_qc_table()
+
+
+def _attach_qc_info(conn, recipes: list[dict]) -> list[dict]:
+    """Fetches every recorded QC check for the given recipes (as plain
+    dicts, id keyed) and annotates each with qc_hard_total/qc_hard_passed
+    (a quick "3/4 checks passed" summary) and qc_failed (the individual
+    failed checks, hard or advisory, with their detail text) -- used by
+    both the pending review queue and the /qc-issues page."""
+    if not recipes:
+        return recipes
+    ids = [r["id"] for r in recipes]
+    placeholders = ",".join("?" * len(ids))
+    cursor = conn.cursor()
+    cursor.execute(
+        f"SELECT recipe_id, check_name, severity, passed, detail FROM recipe_qc_results WHERE recipe_id IN ({placeholders})",
+        ids,
+    )
+    by_recipe: dict = {}
+    for row in cursor.fetchall():
+        by_recipe.setdefault(row["recipe_id"], []).append(dict(row))
+
+    for r in recipes:
+        checks = by_recipe.get(r["id"], [])
+        r["qc_hard_total"] = sum(1 for c in checks if c["severity"] == "hard")
+        r["qc_hard_passed"] = sum(1 for c in checks if c["severity"] == "hard" and c["passed"])
+        r["qc_failed"] = [c for c in checks if not c["passed"]]
+    return recipes
+
+
 def get_recipes(search_term: str = "", book_filter: str = ""):
     conn = sqlite3.connect("recipes.db")
     conn.row_factory = sqlite3.Row
@@ -207,9 +249,49 @@ def get_pending_recipes():
         WHERE status != 'approved'
         ORDER BY source_book, id
     """)
-    recipes = cursor.fetchall()
+    recipes = [dict(row) for row in cursor.fetchall()]
+    recipes = _attach_qc_info(conn, recipes)
     conn.close()
     return recipes
+
+
+def get_qc_failed_recipes():
+    """Recipes -- approved or not -- that failed at least one HARD QC
+    check. This is the backfill-discovered counterpart to the pending
+    review queue: a check added, or backfilled with recipe_qc.py, after a
+    recipe was already approved has nowhere else to surface, since the
+    review queue only shows status != 'approved'."""
+    conn = sqlite3.connect("recipes.db")
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT DISTINCT r.id, r.title, r.source_book, r.engine, r.status
+        FROM recipes r
+        JOIN recipe_qc_results q ON q.recipe_id = r.id
+        WHERE q.severity = 'hard' AND q.passed = 0
+        ORDER BY r.source_book, r.id
+    """)
+    recipes = [dict(row) for row in cursor.fetchall()]
+    recipes = _attach_qc_info(conn, recipes)
+    conn.close()
+    return recipes
+
+
+def get_qc_results_for_recipe(recipe_id: int):
+    """Every recorded QC check for one recipe -- passes included, unlike
+    _attach_qc_info's qc_failed -- for the full pass/fail table on the
+    recipe detail page. Returned in the same order as CHECKS so the table
+    doesn't reshuffle between recipes or page loads."""
+    conn = sqlite3.connect("recipes.db")
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT check_name, severity, passed, detail FROM recipe_qc_results WHERE recipe_id = ?",
+        (recipe_id,),
+    )
+    by_name = {row["check_name"]: dict(row) for row in cursor.fetchall()}
+    conn.close()
+    return [by_name[name] for name, _, _ in _QC_CHECKS if name in by_name]
 
 
 def create_recipe(title, source_book, ingredients, instructions):
@@ -419,6 +501,13 @@ def review_page(request: Request, _: None = Depends(require_admin)):
         request=request, name="review.html", context={"recipes": recipes, "is_admin": True}
     )
 
+@app.get("/qc-issues")
+def qc_issues_page(request: Request, _: None = Depends(require_admin)):
+    recipes = get_qc_failed_recipes()
+    return templates.TemplateResponse(
+        request=request, name="qc_issues.html", context={"recipes": recipes, "is_admin": True}
+    )
+
 @app.get("/books")
 def books_page(request: Request, sort: str = "filename_asc", show_hidden: bool = False):
     books = get_books(sort=sort, show_hidden=show_hidden)
@@ -527,6 +616,7 @@ def recipe_detail(request: Request, recipe_id: int):
     made_it_count = sum(1 for r in reviews if r["made_it"])
     rated = [r["rating"] for r in reviews if r["rating"]]
     avg_rating = round(sum(rated) / len(rated), 1) if rated else None
+    qc_results = get_qc_results_for_recipe(recipe_id) if admin else []
 
     return templates.TemplateResponse(
         request=request,
@@ -534,7 +624,7 @@ def recipe_detail(request: Request, recipe_id: int):
         context={
             "recipe": recipe, "ingredients": ingredients, "instructions": instructions, "notes": notes, "is_admin": admin,
             "user_email": user_email, "reviews": reviews, "my_review": my_review,
-            "made_it_count": made_it_count, "avg_rating": avg_rating,
+            "made_it_count": made_it_count, "avg_rating": avg_rating, "qc_results": qc_results,
         }
     )
 

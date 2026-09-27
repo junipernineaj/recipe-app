@@ -57,6 +57,7 @@ from extract_recipes import (
     looks_like_index_chunk,
     pdftotext_pages,
 )
+from recipe_qc import init_qc_table, run_checks
 
 # Ollama's structured-outputs feature: passing a JSON schema as `format`
 # constrains generation so the model can't return malformed JSON. We wrap
@@ -197,6 +198,7 @@ def main():
 
     engine = f"ollama:{args.model}"
     conn = init_db(Path(args.db).expanduser())
+    init_qc_table(conn)
 
     print(f"Extracting text from {pdf_path.name} ...")
     pages = pdftotext_pages(pdf_path)
@@ -224,7 +226,8 @@ def main():
                   f"than inserting as recipes", file=sys.stderr)
             recipes = []
         for recipe in recipes:
-            insert_recipe(conn, recipe, args.book_title, source_path, page_start, page_end, engine=engine)
+            recipe_id = insert_recipe(conn, recipe, args.book_title, source_path, page_start, page_end, engine=engine)
+            run_checks(conn, recipe_id)
 
         conn.execute("""
             INSERT INTO extraction_log

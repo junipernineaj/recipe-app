@@ -31,6 +31,35 @@
             {% endif %}
         </div>
 
+        {% if is_admin and qc_results %}
+        <div class="recipe-section">
+            <h2>QC Checks</h2>
+            <table class="qc-table">
+                <thead>
+                    <tr><th></th><th>Check</th><th>Detail</th></tr>
+                </thead>
+                <tbody>
+                    {% for c in qc_results %}
+                    <tr>
+                        <td class="qc-icon">
+                            {% if c["passed"] %}
+                            <span class="qc-tick qc-tick-pass">&#10003;</span>
+                            {% else %}
+                            <span class="qc-tick qc-tick-fail">&#10007;</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {{ c["check_name"] | replace("_", " ") | capitalize }}
+                            {% if c["severity"] == "advisory" %}<span class="qc-severity-tag">advisory</span>{% endif %}
+                        </td>
+                        <td>{{ c["detail"] or "—" }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% endif %}
+
         <div class="recipe-section">
             <h2>Ingredients</h2>
             <ul>

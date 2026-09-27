@@ -105,6 +105,54 @@ a:hover { text-decoration: underline; }
 .recipe-info .source { display: block; font-size: 0.85rem; color: var(--brown-mid); margin-top: 0.15rem; }
 .recipe-info .source:hover { color: var(--terracotta); text-decoration: underline; }
 
+.flag-note {
+    font-size: 0.85rem;
+    color: var(--brown-mid);
+    margin: 0.35rem 0 0;
+}
+
+.qc-badge {
+    display: inline-block;
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 0.1rem 0.5rem;
+    border-radius: 999px;
+    margin-top: 0.35rem;
+}
+.qc-badge.qc-pass { background: rgba(122, 132, 80, 0.15); color: var(--olive); }
+.qc-badge.qc-fail { background: rgba(193, 80, 46, 0.12); color: var(--terracotta-dark); }
+
+.qc-note { font-size: 0.8rem; }
+.qc-note.qc-hard { color: var(--terracotta-dark); }
+.qc-note.qc-advisory { color: var(--brown-mid); font-style: italic; }
+
+.qc-table { width: 100%; border-collapse: collapse; }
+.qc-table th, .qc-table td {
+    text-align: left;
+    padding: 0.5rem 0.75rem;
+    border-bottom: 1px dashed var(--border);
+    font-size: 0.9rem;
+    vertical-align: top;
+}
+.qc-table th {
+    color: var(--brown-mid);
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    border-bottom: 1px solid var(--border);
+}
+.qc-table tr:last-child td { border-bottom: none; }
+.qc-icon { width: 1.75rem; text-align: center; font-size: 1.1rem; }
+.qc-tick-pass { color: var(--olive); }
+.qc-tick-fail { color: var(--terracotta-dark); font-weight: bold; }
+.qc-severity-tag {
+    display: inline-block;
+    font-size: 0.7rem;
+    color: var(--brown-mid);
+    font-style: italic;
+    margin-left: 0.35rem;
+}
+
 .delete-btn {
     background: none;
     border: 1px solid var(--border);
