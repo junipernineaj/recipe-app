@@ -206,6 +206,22 @@ far — readable end to end by anyone wanting the whole story — maintained
 going forward by appending a short entry after each future change. This
 file is the result.
 
+## Sorting the review queue
+
+Tony asked for a way to sort the review queue by book name and by QC
+score, rather than only ever scrolling through it in extraction order --
+sorting by QC score makes it easy to prioritise the clean-looking,
+quick-to-approve recipes first; sorting by book makes it easy to focus on
+(or deliberately postpone) one particular book at a time.
+
+Added two clickable "Sort by" toggles above the queue, matching the
+existing sort-header pattern already used on the books list (click to
+sort, click again to reverse, with a ▲/▼ arrow showing the active
+direction). QC score is the fraction of hard checks passed for that
+recipe; a recipe that hasn't been through `recipe_qc.py` yet always sorts
+to the bottom under a QC sort, in either direction, since there's nothing
+to rank it by. Tested and confirmed working.
+
 ---
 
 *Still on the list, deliberately deferred: Tier 2 (the LLM-based semantic
