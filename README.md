@@ -17,6 +17,12 @@ database schema, and the gotchas that have come up along the way. Read that
 before touching the pipeline scripts — it'll save you rediscovering the
 same footguns twice.
 
+**Curious how this project got here?**
+[`documentation/PROJECT_HISTORY.md`](documentation/PROJECT_HISTORY.md) is a
+running log of what's been asked for and built, in order. If you're a
+Claude session picking this project up fresh, read that file and keep
+appending to it after each change.
+
 ## Quick reference
 
 | What | Where |
