@@ -10,3 +10,4 @@ recipes.db
 *.log
 pipeline/inventory.csv
 site_check_results.json
+adhoc_scripts/
