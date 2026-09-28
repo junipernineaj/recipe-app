@@ -458,6 +458,33 @@ it against `main.py` with the old (`recipe_relations`-only) `delete_
 recipe`, and it failed exactly as expected, naming `recipe_reviews` and
 `recipe_qc_results` as the tables left behind.
 
+## Fixing a false positive in the authors-page check
+
+Running the new `/unit-tests` for real on production immediately
+surfaced something else: `check_authors_page_lists_every_book` reported
+"Jamie Oliver - Jamies Dinners" as missing from `/authors`, even though
+the book was right there on the page -- just displayed as "Jamie's
+Dinner", its manually-corrected title (see "Manually-set book
+title/author, and a precise `/authors` page" above). The check had never
+been updated for that feature: it derived its own expected title by
+naively splitting `source_book` on " - ", rather than resolving it the
+same way the page itself does.
+
+Fixed it to call `get_books_with_authors()` directly instead of
+reimplementing a simpler version of what it already does. That fix had
+its own bug before it ever shipped, caught while verifying it: Jinja2
+autoescapes template output, so a title with an apostrophe -- again,
+exactly "Jamie's Dinner" -- actually renders as "Jamie&#39;s Dinner", not
+the raw string. Comparing against the unescaped title would have
+reintroduced a false positive for the very book that surfaced the bug in
+the first place. Now compares against the HTML-escaped title
+(`markupsafe.escape`, the same escaping Jinja2 applies), and verified
+against a fixture reproducing Tony's exact scenario: a recipe whose
+`source_book` parses to one title, with an inventory row correcting it to
+a different one containing an apostrophe. Confirmed the original check
+false-positives on it, the first attempt at a fix still false-positives
+on it, and the final version passes.
+
 ---
 
 *Still on the list, deliberately deferred: Tier 2 (the LLM-based semantic

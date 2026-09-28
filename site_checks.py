@@ -31,6 +31,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi.testclient import TestClient
+from markupsafe import escape as _html_escape
 
 import main
 from pipeline.recipe_qc import CHECKS as _QC_CHECKS
@@ -320,13 +321,27 @@ def check_home_page_counts_match_database(client):
 
 
 def check_authors_page_lists_every_book(client):
-    conn = sqlite3.connect("recipes.db")
-    books = [row[0] for row in conn.execute(
-        "SELECT DISTINCT source_book FROM recipes WHERE status = 'approved'"
-    ).fetchall()]
-    conn.close()
+    """Uses main.get_books_with_authors() -- the exact same resolution
+    /authors itself calls -- rather than re-deriving an expected title by
+    naively parsing source_book. That naive version flagged a false
+    positive for any book whose title/author had since been manually
+    corrected via /books' "Edit" button (see PROJECT_HISTORY.md,
+    "Manually-set book title/author, and a precise /authors page"): the
+    corrected title is what actually displays, not the original raw
+    "Author - Title" parse, so checking for the latter failed even when
+    the page was completely correct. Found 2026-09-28 when "Jamie Oliver -
+    Jamies Dinners" (the raw parse) was flagged missing, even though the
+    book was right there on the page as "Jamie's Dinner" (the corrected
+    title).
+
+    Compares against the HTML-escaped title, not the raw one -- Jinja2
+    autoescapes template output, so a title with an apostrophe (like
+    "Jamie's Dinner") actually renders as "Jamie&#39;s Dinner". Checking
+    for the raw, unescaped title would have reintroduced a false positive
+    for exactly the book that motivated this fix in the first place."""
+    books = main.get_books_with_authors()
     r = client.get("/authors")
-    missing = [b for b in books if b.rsplit(" - ", 1)[-1] not in r.text]
+    missing = [b["title"] for b in books if str(_html_escape(b["title"])) not in r.text]
     if missing:
         return False, f"{len(missing)} approved book(s) missing from /authors: {', '.join(missing[:5])}"
     return True, None
