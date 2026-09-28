@@ -217,6 +217,32 @@ def init_recipe_relations_table():
 init_recipe_relations_table()
 
 
+def init_feedback_table():
+    """Bug reports and feature ideas submitted through /feedback by anyone
+    who reaches the site (see current_user_email()'s docstring on the
+    trust model -- same idea: attribute it to a real person via Cloudflare
+    Access, without building a login system). status starts at 'new' and
+    is moved to 'done' or 'dismissed' from the admin-only /feedback/inbox
+    page as items get triaged."""
+    conn = sqlite3.connect("recipes.db")
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS site_feedback (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_email TEXT,
+            kind TEXT NOT NULL,
+            message TEXT NOT NULL,
+            page_url TEXT,
+            status TEXT NOT NULL DEFAULT 'new',
+            created_at TEXT NOT NULL
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+
+init_feedback_table()
+
+
 def get_recipes_for_book(source_book, exclude_id=None):
     """Every recipe sharing source_book with the recipe being edited (used
     to populate the Needs / Works well with dropdowns) -- deliberately
@@ -759,6 +785,31 @@ def get_pending_recipe_count():
     return count
 
 
+def get_feedback():
+    """Every feedback submission, newest first -- unresolved ('new') items
+    sorted ahead of triaged ones ('done'/'dismissed'), so the inbox always
+    shows what still needs a look at the top rather than making you scroll
+    past resolved items sorted purely by date."""
+    conn = sqlite3.connect("recipes.db")
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT id, user_email, kind, message, page_url, status, created_at
+        FROM site_feedback
+        ORDER BY (status = 'new') DESC, created_at DESC
+    """)
+    items = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    return items
+
+
+def get_open_feedback_count():
+    conn = sqlite3.connect("recipes.db")
+    count = conn.execute("SELECT COUNT(*) FROM site_feedback WHERE status = 'new'").fetchone()[0]
+    conn.close()
+    return count
+
+
 @app.get("/")
 def read_root(request: Request, book: str = ""):
     recipes = get_recipes(book_filter=book)
@@ -788,6 +839,41 @@ def authors_page(request: Request):
         request=request, name="authors.html",
         context={"books": books, "is_admin": is_admin(request)}
     )
+
+@app.get("/feedback")
+def feedback_form(request: Request, submitted: str = ""):
+    return templates.TemplateResponse(
+        request=request, name="feedback.html",
+        context={
+            "is_admin": is_admin(request),
+            "submitted": bool(submitted),
+            "referer": request.headers.get("referer", ""),
+        }
+    )
+
+
+@app.post("/feedback")
+def submit_feedback(request: Request, kind: str = Form(...), message: str = Form(...), page_url: str = Form("")):
+    user_email = current_user_email(request)
+    if not user_email:
+        # Same trust model as recipe reviews (see current_user_email()'s
+        # docstring) -- fail loudly rather than saving feedback with no
+        # idea who it's from.
+        raise HTTPException(status_code=400, detail="Couldn't identify who you are -- are you accessing this through Cloudflare Access?")
+    message = message.strip()
+    if not message:
+        raise HTTPException(status_code=400, detail="Feedback message can't be empty")
+    if kind not in ("bug", "feature"):
+        kind = "feature"
+    conn = sqlite3.connect("recipes.db")
+    conn.execute("""
+        INSERT INTO site_feedback (user_email, kind, message, page_url, status, created_at)
+        VALUES (?, ?, ?, ?, 'new', datetime('now'))
+    """, (user_email, kind, message, page_url.strip() or None))
+    conn.commit()
+    conn.close()
+    return RedirectResponse(url="/feedback?submitted=1", status_code=303)
+
 
 @app.get("/review")
 def review_page(request: Request, sort: str = "book_asc", _: None = Depends(require_admin)):
@@ -836,6 +922,27 @@ def run_unit_tests(_: None = Depends(require_admin)):
     summary = site_checks.run_all()
     site_checks.save_results(summary)
     return RedirectResponse(url="/unit-tests", status_code=303)
+
+
+@app.get("/feedback/inbox")
+def feedback_inbox(request: Request, _: None = Depends(require_admin)):
+    items = get_feedback()
+    open_count = get_open_feedback_count()
+    return templates.TemplateResponse(
+        request=request, name="feedback_inbox.html",
+        context={"items": items, "is_admin": True, "open_count": open_count}
+    )
+
+
+@app.post("/feedback/{feedback_id}/status")
+def update_feedback_status(feedback_id: int, status: str = Form(...), _: None = Depends(require_admin)):
+    if status not in ("new", "done", "dismissed"):
+        raise HTTPException(status_code=400, detail="Invalid status")
+    conn = sqlite3.connect("recipes.db")
+    conn.execute("UPDATE site_feedback SET status = ? WHERE id = ?", (status, feedback_id))
+    conn.commit()
+    conn.close()
+    return RedirectResponse(url="/feedback/inbox", status_code=303)
 
 @app.get("/books")
 def books_page(request: Request, sort: str = "filename_asc", show_hidden: bool = False):
@@ -1127,6 +1234,21 @@ def approve_recipe(recipe_id: int, _: None = Depends(require_admin)):
     conn.commit()
     conn.close()
     return RedirectResponse(url="/review", status_code=303)
+
+
+@app.post("/recipes/{recipe_id}/unapprove")
+def unapprove_recipe(recipe_id: int, _: None = Depends(require_admin)):
+    """Puts a live recipe back into the review queue -- for a recipe that
+    was approved too hastily and needs another look (a QC issue spotted
+    later, or just a change of mind). Lands back on the recipe's own page
+    rather than /review, since unapproving is usually the first step
+    toward fixing something on this exact recipe, not a queue-clearing
+    action."""
+    conn = sqlite3.connect("recipes.db")
+    conn.execute("UPDATE recipes SET status = 'pending' WHERE id = ?", (recipe_id,))
+    conn.commit()
+    conn.close()
+    return RedirectResponse(url=f"/recipes/{recipe_id}", status_code=303)
 
 
 @app.delete("/recipes/{recipe_id}")

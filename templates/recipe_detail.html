@@ -28,13 +28,26 @@
                     <button type="submit">Approve</button>
                 </form>
             </div>
+            {% else %}
+            <div class="review-banner">
+                <span>Approved &middot; live on the site</span>
+                <form method="post" action="/recipes/{{ recipe['id'] }}/unapprove">
+                    <button type="submit" class="delete-btn">Unapprove</button>
+                </form>
+            </div>
             {% endif %}
             {% endif %}
         </div>
 
-        {% if is_admin and qc_results %}
+        {% if is_admin %}
         <div class="recipe-section">
-            <h2>QC Checks</h2>
+            <div class="actions-row" style="margin-bottom: 0.75rem;">
+                <h2 style="margin-bottom: 0;">QC Checks</h2>
+                <form method="post" action="/recipes/{{ recipe['id'] }}/qc/rerun">
+                    <button type="submit" class="btn">Rerun checks</button>
+                </form>
+            </div>
+            {% if qc_results %}
             <table class="qc-table">
                 <thead>
                     <tr><th></th><th>Check</th><th>Detail</th><th>Reviewed</th></tr>
@@ -63,6 +76,9 @@
                     {% endfor %}
                 </tbody>
             </table>
+            {% else %}
+            <p class="muted">No QC checks recorded yet -- click "Rerun checks" to run them now.</p>
+            {% endif %}
         </div>
         {% endif %}
 
