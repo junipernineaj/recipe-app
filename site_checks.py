@@ -2,10 +2,22 @@
 break something obvious" tests Tony wants to always pass after a change.
 Distinct from pipeline/recipe_qc.py, which checks the *data* (individual
 recipes); this checks the *app* (routes, templates, page/database
-consistency). Every check here is read-only against the live recipes.db --
-nothing here ever creates, updates, or deletes a row -- so it's safe to run
-against the real production database at any time: from the command line,
-from a cron job, or from the /unit-tests admin page.
+consistency). Almost every check here is read-only against the live
+recipes.db, so it's safe to run against the real production database at
+any time: from the command line, from a cron job, or from the
+/unit-tests admin page.
+
+The one exception is check_delete_recipe_cleans_up_related_rows, which
+has to actually exercise the delete route to mean anything (a purely
+read-only check can only notice orphaned rows that already exist --
+that's exactly why check_no_orphaned_foreign_keys didn't catch either of
+the two times delete_recipe shipped broken; see PROJECT_HISTORY.md, "The
+delete_recipe fix that wasn't"). It creates its own throwaway fixture
+recipes, tagged unmistakably as fixtures, and always deletes every trace
+of them itself in a finally block -- regardless of whether the check
+passes, fails, or raises -- so it's still safe to run against production:
+worst case, it briefly creates and then removes two 'pending' recipes
+that were never visible on the site.
 
 Usage:
     python3 site_checks.py            # run once, print every result, save it
@@ -164,6 +176,111 @@ def check_no_orphaned_foreign_keys(client):
     return True, None
 
 
+def check_delete_recipe_cleans_up_related_rows(client):
+    """Creates two throwaway 'pending' recipes, links them with a review,
+    a QC result, and a relation in both directions, deletes one of them
+    through the real DELETE /recipes/{id} route, and confirms every
+    related row actually disappeared with it.
+
+    check_no_orphaned_foreign_keys above only ever notices orphans that
+    already exist -- it can't tell a delete route that cleans up properly
+    from one that doesn't, unless something has already been deleted and
+    left a mess behind. That's exactly how delete_recipe shipped broken
+    twice in a row (see PROJECT_HISTORY.md, "Catching a real bug on the
+    very first run" and "The delete_recipe fix that wasn't") without
+    either the CI fixture (one recipe, never deleted) or this same check
+    ever flagging it. This one actually exercises the delete path instead
+    of inspecting its aftermath, so a regression here fails immediately
+    rather than waiting to be noticed as orphaned rows on production
+    later.
+
+    Uses status='pending' so these fixtures can never affect the
+    approved-only counts the other checks rely on, and always cleans up
+    after itself in a finally block -- including the second recipe, which
+    the route under test never touches -- so a broken delete route still
+    can't leave real rows behind, even when run against production."""
+    headers = _admin_headers()
+    if not headers:
+        return True, "skipped -- ADMIN_EMAILS isn't set in this environment"
+
+    marker = "__site_checks_delete_cleanup_fixture__"
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds") + "Z"
+
+    conn = sqlite3.connect("recipes.db")
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO recipes (title, source_book, source_path, ingredients, instructions, status) "
+        "VALUES (?, ?, 'fixture.pdf', 'ing', 'inst', 'pending')",
+        ("Fixture A", marker),
+    )
+    recipe_a = cursor.lastrowid
+    cursor.execute(
+        "INSERT INTO recipes (title, source_book, source_path, ingredients, instructions, status) "
+        "VALUES (?, ?, 'fixture.pdf', 'ing', 'inst', 'pending')",
+        ("Fixture B", marker),
+    )
+    recipe_b = cursor.lastrowid
+    cursor.execute(
+        "INSERT INTO recipe_reviews (recipe_id, user_email, made_it, updated_at) VALUES (?, ?, 0, ?)",
+        (recipe_a, "site-checks-fixture@example.com", now),
+    )
+    cursor.execute(
+        "INSERT INTO recipe_qc_results (recipe_id, check_name, passed, severity, checked_at) VALUES (?, ?, 1, 'hard', ?)",
+        (recipe_a, "__fixture_check__", now),
+    )
+    # Both directions: recipe_a authoring a relation, and recipe_b
+    # authoring one back at recipe_a -- delete_recipe's cleanup query has
+    # to match recipe_id OR related_recipe_id to catch both.
+    cursor.execute(
+        "INSERT INTO recipe_relations (recipe_id, related_recipe_id, relation_type, created_at) VALUES (?, ?, 'needs', ?)",
+        (recipe_a, recipe_b, now),
+    )
+    cursor.execute(
+        "INSERT INTO recipe_relations (recipe_id, related_recipe_id, relation_type, created_at) VALUES (?, ?, 'pairs_with', ?)",
+        (recipe_b, recipe_a, now),
+    )
+    conn.commit()
+    conn.close()
+
+    try:
+        r = client.delete(f"/recipes/{recipe_a}", headers=headers)
+        if r.status_code != 200:
+            return False, f"DELETE /recipes/{recipe_a} returned {r.status_code}, expected 200"
+
+        conn = sqlite3.connect("recipes.db")
+        leftovers = []
+        if conn.execute("SELECT 1 FROM recipes WHERE id = ?", (recipe_a,)).fetchone():
+            leftovers.append("recipes")
+        if conn.execute("SELECT 1 FROM recipe_reviews WHERE recipe_id = ?", (recipe_a,)).fetchone():
+            leftovers.append("recipe_reviews")
+        if conn.execute("SELECT 1 FROM recipe_qc_results WHERE recipe_id = ?", (recipe_a,)).fetchone():
+            leftovers.append("recipe_qc_results")
+        if conn.execute(
+            "SELECT 1 FROM recipe_relations WHERE recipe_id = ? OR related_recipe_id = ?",
+            (recipe_a, recipe_a),
+        ).fetchone():
+            leftovers.append("recipe_relations")
+        conn.close()
+
+        if leftovers:
+            return False, "deleting a recipe left rows behind in: " + ", ".join(leftovers)
+        return True, None
+    finally:
+        # Runs whether the check passed, failed, or raised. Cleans up
+        # recipe_b (the route under test never touches it) and, using
+        # direct deletes rather than the route being tested, anything
+        # still left of recipe_a if the delete didn't fully do its job.
+        conn = sqlite3.connect("recipes.db")
+        cursor = conn.cursor()
+        for rid in (recipe_a, recipe_b):
+            cursor.execute("DELETE FROM recipe_reviews WHERE recipe_id = ?", (rid,))
+            cursor.execute("DELETE FROM recipe_qc_results WHERE recipe_id = ?", (rid,))
+            cursor.execute("DELETE FROM recipe_relations WHERE recipe_id = ? OR related_recipe_id = ?", (rid, rid))
+            cursor.execute("DELETE FROM recipes WHERE id = ?", (rid,))
+        conn.commit()
+        conn.close()
+
+
 def check_qc_backfill_up_to_date(client):
     """Catches the exact "QC: 2/5" confusion from before the score was
     broadened -- a recipe checked before a new rule was added shows fewer
@@ -222,6 +339,7 @@ CHECKS = [
     ("admin_pages_load_for_admin", check_admin_pages_load_for_admin),
     ("static_css_intact", check_static_css_intact),
     ("no_orphaned_foreign_keys", check_no_orphaned_foreign_keys),
+    ("delete_recipe_cleans_up_related_rows", check_delete_recipe_cleans_up_related_rows),
     ("qc_backfill_up_to_date", check_qc_backfill_up_to_date),
     ("home_page_counts_match_database", check_home_page_counts_match_database),
     ("authors_page_lists_every_book", check_authors_page_lists_every_book),

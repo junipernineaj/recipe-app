@@ -426,6 +426,38 @@ row count and confirm it's clean going forward -- if it's nonzero, that's
 the roughly-one-day backlog this gap left behind, not a sign the new fix
 didn't take.
 
+## Adding a regression test that would have caught both misses
+
+Tony asked the obvious follow-up: if this broke twice without anyone
+noticing in CI, shouldn't there be a test for it? There should have been
+-- and the reason there wasn't one already is a real gap in
+`site_checks.py`'s design, not an oversight in what it checks.
+`check_no_orphaned_foreign_keys` is read-only, by design, so it's safe to
+run against the real production database from cron or `/unit-tests`. But
+read-only means it can only notice orphaned rows that *already exist* --
+it has no way to tell a delete route that cleans up properly from one
+that doesn't, unless something has actually been deleted and left a mess
+behind. The CI fixture seeds exactly one recipe and never deletes
+anything, so a broken `delete_recipe` had nothing to leave orphaned in CI
+either time -- both bugs were only ever going to surface on production,
+after real deletions had already happened, which is exactly how the first
+one was found and exactly why the second one went unnoticed for a day.
+
+Added `check_delete_recipe_cleans_up_related_rows`: it creates two
+throwaway `pending` recipes, links them with a review, a QC result, and a
+relation in both directions, deletes one through the real
+`DELETE /recipes/{id}` route, and checks nothing was left behind --
+actually exercising the delete path instead of inspecting its aftermath.
+Because it brings its own fixture data rather than depending on whatever
+already happens to be in the database, it's the one check in
+`site_checks.py` that means something in GitHub Actions too, not just on
+junipernine2 -- and it always cleans up after itself in a `finally` block,
+regardless of pass/fail/exception, so it's still safe to run against
+production. Verified it actually catches the class of bug it's for: ran
+it against `main.py` with the old (`recipe_relations`-only) `delete_
+recipe`, and it failed exactly as expected, naming `recipe_reviews` and
+`recipe_qc_results` as the tables left behind.
+
 ---
 
 *Still on the list, deliberately deferred: Tier 2 (the LLM-based semantic

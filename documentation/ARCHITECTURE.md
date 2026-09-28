@@ -427,12 +427,23 @@ the real ~700-book library or the real `inventory.sqlite`. That means it
 can only exercise the checks that don't depend on real data: routes
 loading, admin gating, htmx being wired up where needed, static assets
 being intact. The checks that matter most for catching *data* problems
-(orphaned rows, a stale QC backfill, live counts not matching) still only
-run for real on junipernine2, via cron and the `/unit-tests` admin page —
-this workflow doesn't replace that, it catches a different, earlier class
-of bug: something that breaks the app itself before a change is ever
-pulled to the server, like a page referencing a template that never got
-committed.
+in the existing library (a stale QC backfill, live counts not matching)
+still only run for real on junipernine2, via cron and the `/unit-tests`
+admin page — this workflow doesn't replace that, it catches a different,
+earlier class of bug: something that breaks the app itself before a
+change is ever pulled to the server, like a page referencing a template
+that never got committed.
+
+One check doesn't fit that split cleanly: `delete_recipe_cleans_up_
+related_rows` (added 2026-09-28) brings its own throwaway fixture data
+rather than depending on whatever's already in the database, so it runs
+meaningfully in GitHub Actions too, not just on junipernine2 — see
+`site_checks.py`'s own docstring and `documentation/PROJECT_HISTORY.md`,
+"The delete_recipe fix that wasn't" for why a purely read-only check like
+`no_orphaned_foreign_keys` can't catch this class of bug at all: it only
+notices orphans that already exist, so a broken delete route on a
+database where nothing has been deleted yet (true of every fresh CI run)
+just leaves nothing behind to notice.
 
 `ci_fixture_db.py` builds the small, throwaway databases this needs — one
 seeded, fully-QC'd recipe in a fixture `recipes.db`, and a schema-only
