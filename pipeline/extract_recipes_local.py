@@ -40,7 +40,12 @@ import sys
 import time
 from pathlib import Path
 
-import requests
+try:
+    import requests
+except ImportError:
+    print("ERROR: the 'requests' package isn't installed in this venv.\n"
+          "Run: pip install requests", file=sys.stderr)
+    sys.exit(1)
 
 try:
     from tqdm import tqdm

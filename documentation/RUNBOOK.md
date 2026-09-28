@@ -230,7 +230,92 @@ venv at all.
   hash-identical books), and `remove_books_by_path_prefix.py` cleaned up
   the leftover rows once the folder's former path was known.
 
+## Extracting recipes from a book (Phase 2)
+
+Two interchangeable scripts, both writing into the same `recipes.db` with
+the same schema and the same chunking logic -- see "Reprocessing a book
+with different chunk settings" below for why `chunk_index`/`--resume`
+behave the way they do, and the `engine` column on `recipes` for how
+recipes from either one are told apart afterward. Needs the
+`~/cookbook-project/venv` (same one the pipeline stages above use).
+
+### `extract_recipes.py` — via the Claude API
+
+```
+export ANTHROPIC_API_KEY=sk-ant-...
+cd ~/recipe-app/pipeline
+python3 extract_recipes.py --db ~/recipe-app/recipes.db \
+    --book-title "Author - Title" --pdf "/path/to/the.pdf" \
+    --resume
+```
+
+Book filenames always have spaces in them ("Author - Title.pdf"), so
+**quote both `--pdf` and `--book-title`** — an unquoted `--pdf` path gets
+split by the shell into separate words, and argparse fails with a
+confusing "unrecognized arguments" error naming whatever came after the
+first space, not a helpful "path not found."
+
+Flags:
+- `--pdf` (required) — the book's PDF. The compressed copy is fine.
+- `--book-title` (required) — display name stored as `source_book`,
+  "Author - Title" convention.
+- `--db` (required) — normally `~/recipe-app/recipes.db`.
+- `--pages-per-chunk` (default 15) — see "Reprocessing a book with
+  different chunk settings" below for why a smaller value often catches
+  more, at the cost of more API calls.
+- `--model` (default `claude-sonnet-5`; also accepts
+  `claude-haiku-4-5-20251001`) — real, measured cost per book comes
+  straight from the API's own token usage, printed at the end of the run,
+  not an estimate.
+- `--resume` — skip chunks already recorded in `extraction_log` for this
+  book and engine. Only safe when `--pages-per-chunk` hasn't changed
+  since the last run on this book — see below.
+- `--sample N` — only process the first N chunks, for a quick smoke test
+  before committing to the whole book.
+
+Recipes land with `status='pending'` — nothing shows up on the live site
+until reviewed and approved via the review queue.
+
+### `extract_recipes_local.py` — via a local Ollama model
+
+Same schema, same chunking logic, same extraction prompt — imports the
+shared pieces straight from `extract_recipes.py`, so the two are a fair
+side-by-side comparison rather than apples to oranges. Cost is $0.00; the
+real constraint is GPU time, so this reports elapsed time per chunk
+instead of a dollar figure. Requires Ollama running and reachable, with
+the model already pulled.
+
+**We default to `qwen3:14b`** — not the `qwen2.5:14b` the script itself
+falls back to if `--model` is left off, so always pass it explicitly:
+
+```
+cd ~/recipe-app/pipeline
+python3 extract_recipes_local.py --db ~/recipe-app/recipes.db \
+    --book-title "Author - Title" --pdf "/path/to/the.pdf" \
+    --model qwen3:14b --resume
+```
+
+Flags (beyond the ones shared with `extract_recipes.py` above):
+- `--model` (script default: `qwen2.5:14b` — **pass `qwen3:14b`
+  explicitly**, per above) — an Ollama model tag; must already be pulled
+  (`ollama pull qwen3:14b`).
+- `--ollama-host` (default `http://localhost:11434`, i.e. Ollama running
+  on junipernine2 itself) — only needs changing if pointing at a
+  different machine, e.g. the local-AI box.
+
+Known limitation, same as the API version: chunks don't overlap, so a
+recipe straddling a chunk boundary can come out incomplete or duplicated.
+Worth knowing on top of that: a smaller local model is more likely to
+miss -- or fail to flag -- a subtle OCR-garbling judgment call than Sonnet
+was in testing. That's exactly what the `engine` column is for: review
+can be filtered by which engine produced a given recipe.
+
 ## Reprocessing a book with different chunk settings
+
+See "Extracting recipes from a book (Phase 2)" above for the full flag
+reference for both `extract_recipes.py` and `extract_recipes_local.py` —
+this section only covers what's different about running either one again
+on a book that's already been extracted once.
 
 If a book's recipe coverage looks thin, the first thing to check is what
 `--pages-per-chunk` it was extracted with (default 15). Smaller chunks
@@ -267,7 +352,7 @@ live database and let the review queue be the reconciliation step:
 ```
 cd ~/recipe-app/pipeline
 python3 extract_recipes.py --db ~/recipe-app/recipes.db \
-    --book-title "Author - Title" --pdf /path/to/the.pdf \
+    --book-title "Author - Title" --pdf "/path/to/the.pdf" \
     --pages-per-chunk 8
 ```
 
@@ -302,7 +387,7 @@ python3 remove_book_recipes.py --book "Author - Title" --apply --clear-extractio
 
 cd ~/recipe-app/pipeline
 python3 extract_recipes.py --db ~/recipe-app/recipes.db \
-    --book-title "Author - Title" --pdf /path/to/the.pdf \
+    --book-title "Author - Title" --pdf "/path/to/the.pdf" \
     --pages-per-chunk 8
 ```
 
