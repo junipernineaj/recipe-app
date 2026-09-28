@@ -35,6 +35,10 @@ a:hover { text-decoration: underline; }
 .site-header h1 { font-size: 2.4rem; margin-bottom: 0.25rem; }
 .site-header .tagline { color: var(--brown-mid); font-size: 0.95rem; }
 .site-header .stats-line { color: var(--terracotta-dark); font-weight: 600; font-size: 0.9rem; margin-top: 0.35rem; }
+/* #home-pending-teaser (templates/home_stats.html) renders with no text
+   at all once a book filter has nothing left pending -- collapse its
+   margin then rather than leaving an empty blank line. */
+.site-header .tagline:empty { margin: 0; }
 
 .back-link { display: inline-block; margin-bottom: 1.25rem; font-size: 0.9rem; color: var(--brown-mid); }
 

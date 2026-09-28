@@ -1,0 +1,2 @@
+<p class="stats-line" id="home-stats-line" hx-swap-oob="true">{% if book %}{{ recipes|length }} recipe{{ "s" if recipes|length != 1 else "" }} from this book{% else %}{{ recipes|length }} recipe{{ "s" if recipes|length != 1 else "" }} from {{ books|length }} book{{ "s" if books|length != 1 else "" }}{% endif %}</p>
+<p class="tagline" id="home-pending-teaser" hx-swap-oob="true">{% if pending_count %}{{ pending_count }} more recipe{{ "s" if pending_count != 1 else "" }} {% if book %}from this book {% endif %}waiting for review -- keep checking back!{% endif %}</p>

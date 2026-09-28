@@ -2,7 +2,7 @@
 <html>
 <head>
     <title>My Recipes</title>
-    <link rel="stylesheet" href="/static/style.css?v=5">
+    <link rel="stylesheet" href="/static/style.css?v=6">
     <script src="https://unpkg.com/htmx.org@1.9.12"></script>
 </head>
 <body>
@@ -21,10 +21,7 @@
 </div>
             <h1>🍳 My Recipes</h1>
             <p class="tagline">A home for the recipes worth keeping</p>
-            <p class="stats-line">{{ recipes|length }} recipe{{ "s" if recipes|length != 1 else "" }} from {{ books|length }} book{{ "s" if books|length != 1 else "" }}</p>
-            {% if pending_count %}
-            <p class="tagline">{{ pending_count }} more recipe{{ "s" if pending_count != 1 else "" }} waiting for review -- keep checking back!</p>
-            {% endif %}
+            {% include "home_stats.html" %}
         </div>
 
         <div class="actions-row">

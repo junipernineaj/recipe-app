@@ -833,13 +833,23 @@ def get_recipe_extraction_counts(show_hidden: bool = False):
     conn.close()
     return {"done": rows.get(1, 0), "not_done": rows.get(0, 0)}
 
-def get_pending_recipe_count():
+def get_pending_recipe_count(book_filter: str = ""):
     """Just the count, for the public-facing teaser on the home page --
     no need to pull every pending recipe's title/QC info (like
     get_pending_recipes() does for the review queue itself) just to show
-    a number to a non-admin visitor."""
+    a number to a non-admin visitor. Filtered to one book when the home
+    page's book dropdown is active, so the teaser reflects what's left
+    for THAT book rather than the whole backlog -- matches on
+    source_book the same way get_recipes()'s book_filter does, which is
+    safe to rely on now that extraction refuses a --book-title mismatch
+    (see "Keeping source_book consistent" in ARCHITECTURE.md)."""
     conn = sqlite3.connect("recipes.db")
-    count = conn.execute("SELECT COUNT(*) FROM recipes WHERE status != 'approved'").fetchone()[0]
+    query = "SELECT COUNT(*) FROM recipes WHERE status != 'approved'"
+    params = []
+    if book_filter:
+        query += " AND source_book = ?"
+        params.append(book_filter)
+    count = conn.execute(query, params).fetchone()[0]
     conn.close()
     return count
 
@@ -878,7 +888,7 @@ def read_root(request: Request, book: str = ""):
         context={
             "recipes": recipes, "books": books, "book": book,
             "is_admin": is_admin(request),
-            "pending_count": get_pending_recipe_count(),
+            "pending_count": get_pending_recipe_count(book_filter=book),
         }
     )
 
@@ -887,7 +897,18 @@ def read_root(request: Request, book: str = ""):
 def search(request: Request, q: str = "", book: str = ""):
     recipes = get_recipes(q, book)
     return templates.TemplateResponse(
-        request=request, name="recipe_list.html", context={"recipes": recipes, "is_admin": is_admin(request)}
+        request=request, name="recipe_list.html",
+        context={
+            "recipes": recipes, "is_admin": is_admin(request),
+            # The book dropdown's htmx swap only replaces #recipe-list --
+            # these extra bits ride along as out-of-band swaps (see
+            # templates/home_stats.html) so the stats line and the
+            # pending-review teaser above it stay in sync with whichever
+            # book is selected, rather than always showing the whole
+            # site's totals regardless of the filter.
+            "oob_stats": True, "book": book, "books": get_distinct_source_books(),
+            "pending_count": get_pending_recipe_count(book_filter=book),
+        }
     )
 
 

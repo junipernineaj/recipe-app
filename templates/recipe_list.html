@@ -20,3 +20,6 @@
     <li class="empty-state">No recipes found.</li>
     {% endfor %}
 </ul>
+{% if oob_stats %}
+{% include "home_stats.html" %}
+{% endif %}
