@@ -2,7 +2,7 @@
 <html>
 <head>
     <title>{{ recipe["title"] | titlecase }}</title>
-    <link rel="stylesheet" href="/static/style.css?v=5">
+    <link rel="stylesheet" href="/static/style.css?v=6">
     <script src="https://unpkg.com/htmx.org@1.9.12"></script>
 </head>
 <body>
@@ -11,13 +11,19 @@
         <div class="recipe-header">
             <h1>{{ recipe["title"] | titlecase }}</h1>
             <p class="source">From: {{ recipe["source_book"] }}{% if recipe["engine"] %} &middot; extracted by {{ recipe["engine"] }}{% endif %}{% if recipe["extracted_at"] %} &middot; {{ recipe["extracted_at"][:16] }} UTC{% endif %}</p>
-            {% if recipe["source_path"] and recipe["source_page"] %}
-            <a href="/recipes/{{ recipe['id'] }}/source#page={{ recipe['source_page'] }}" target="_blank" rel="noopener" class="btn">
-                &#128196; View original page{% if recipe['source_page_end'] and recipe['source_page_end'] != recipe['source_page'] %}s {{ recipe['source_page'] }}&ndash;{{ recipe['source_page_end'] }}{% else %} {{ recipe['source_page'] }}{% endif %}
-            </a>
+            {% if (recipe["source_path"] and recipe["source_page"]) or is_admin %}
+            <div class="actions-row">
+                {% if recipe["source_path"] and recipe["source_page"] %}
+                <a href="/recipes/{{ recipe['id'] }}/source#page={{ recipe['source_page'] }}" target="_blank" rel="noopener" class="btn">
+                    &#128196; View original page{% if recipe['source_page_end'] and recipe['source_page_end'] != recipe['source_page'] %}s {{ recipe['source_page'] }}&ndash;{{ recipe['source_page_end'] }}{% else %} {{ recipe['source_page'] }}{% endif %}
+                </a>
+                {% endif %}
+                {% if is_admin %}
+                <a href="/recipes/{{ recipe['id'] }}/edit" class="btn">Edit</a>
+                {% endif %}
+            </div>
             {% endif %}
             {% if is_admin %}
-            <a href="/recipes/{{ recipe['id'] }}/edit" class="btn">Edit</a>
             {% if recipe["status"] != "approved" %}
             <div class="review-banner">
                 <span>Pending review</span>
@@ -25,11 +31,11 @@
                 <p class="flag-note">&#9888; {{ recipe["flagged_for_review"] }}</p>
                 {% endif %}
                 <form method="post" action="/recipes/{{ recipe['id'] }}/approve">
-                    <button type="submit">Approve</button>
+                    <button type="submit" class="approve-btn">Approve</button>
                 </form>
                 <form method="post" action="/recipes/{{ recipe['id'] }}/reject"
                       onsubmit="return confirm(&quot;Reject and delete this recipe? This can't be undone.&quot;)">
-                    <button type="submit" class="delete-btn">Reject</button>
+                    <button type="submit" class="reject-btn">Reject</button>
                 </form>
             </div>
             {% else %}
