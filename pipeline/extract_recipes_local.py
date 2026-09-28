@@ -61,6 +61,7 @@ from extract_recipes import (
     COOKBOOK_OCR_COMPRESSED_DIR,
     EXTRACTION_PROMPT,
     already_done,
+    check_book_title_consistency,
     chunk_pages,
     init_db,
     insert_recipe,
@@ -204,16 +205,23 @@ def main():
     ap.add_argument("--ollama-host", default="http://localhost:11434")
     ap.add_argument("--resume", action="store_true", help="skip chunks already recorded in extraction_log for this engine")
     ap.add_argument("--sample", type=int, default=0, help="only process the first N chunks (smoke test)")
+    ap.add_argument("--allow-book-title-mismatch", action="store_true",
+                     help="skip the check that --book-title matches what's already on file for this PDF "
+                          "(only needed if you're deliberately renaming a book)")
     args = ap.parse_args()
 
     pdf_path = resolve_pdf_path(args.pdf, args.fullpath)
     if not pdf_path.exists():
         print(f"ERROR: file not found: {pdf_path}", file=sys.stderr)
         sys.exit(1)
+    source_path = str(pdf_path)
 
     engine = f"ollama:{args.model}"
     conn = init_db(Path(args.db).expanduser())
     init_qc_table(conn)
+
+    if not args.allow_book_title_mismatch and not check_book_title_consistency(conn, args.book_title, source_path):
+        sys.exit(1)
 
     print(f"Extracting text from {pdf_path.name} ...")
     pages = pdftotext_pages(pdf_path)
@@ -227,7 +235,6 @@ def main():
     total_prompt_tok = 0
     total_eval_tok = 0
     total_recipes = 0
-    source_path = str(pdf_path)
     started_at = time.monotonic()
 
     for chunk_index, page_start, page_end, chunk_text in tqdm(chunks, desc=f"Extract ({args.model})", unit="chunk"):

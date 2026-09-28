@@ -230,6 +230,43 @@ venv at all.
   hash-identical books), and `remove_books_by_path_prefix.py` cleaned up
   the leftover rows once the folder's former path was known.
 
+## Finding books with inconsistent source_book naming
+
+A different flavor of duplicate from the one above: not two copies of the
+same file in `inventory`, but one book whose *recipes* disagree with each
+other about what `source_book` should be — usually from re-running
+extraction against the same PDF later on and typing `--book-title`
+differently the second time. Shows up in the app as the same book listed
+twice everywhere that groups or filters by `source_book` (the home page's
+book filter, the review queue, `/qc-issues`).
+
+- **`find_inconsistent_book_titles.py`** — resolves each recipe's
+  `source_path` back to its `inventory` row (following the original/OCR/
+  compressed path chain, same as `/authors`'s title-author resolution),
+  groups recipes by that resolved book, and reports any group where more
+  than one `source_book` value shows up. Read-only, same spirit as
+  `find_duplicate_books.py` above — it only reports, it never merges
+  anything. Deciding which `source_book` a group should standardize on,
+  and fixing it, is a manual step (or a one-off follow-up script) once
+  you've seen the report.
+
+  ```
+  python3 pipeline/find_inconsistent_book_titles.py
+  python3 pipeline/find_inconsistent_book_titles.py --csv inconsistent_book_titles_report.csv
+  ```
+
+  **The incident this was built for (2026-09-28):** "The Christmas
+  Chronicles" by Nigel Slater showed up twice in the home page's book
+  filter — once as `"Nigel Slater - The Christmas Chronicles"` (the
+  documented `--book-title` convention) and once as `"The Christmas
+  Chronicles - Nigel Slater"` (an earlier, unparsed name, likely typed
+  before that convention was settled on). Both `extract_recipes.py` and
+  `extract_recipes_local.py` now refuse to add recipes for a PDF under a
+  `--book-title` that doesn't match what's already on file for that exact
+  path — see `--allow-book-title-mismatch` below — so a fresh instance of
+  this specific drift shouldn't happen again, but it doesn't retroactively
+  fix data from before the check existed.
+
 ## Extracting recipes from a book (Phase 2)
 
 Two interchangeable scripts, both writing into the same `recipes.db` with
@@ -272,7 +309,18 @@ Flags:
 - `--fullpath` — treat `--pdf` as a full path instead of a name inside
   that folder, for a PDF that lives somewhere else.
 - `--book-title` (required) — display name stored as `source_book`,
-  "Author - Title" convention.
+  "Author - Title" convention. Before inserting anything, both scripts
+  check whether recipes already exist for this exact `--pdf` path under a
+  *different* `source_book` and, if so, refuse to proceed — this is what
+  catches a re-run that types the title differently than last time (see
+  "Finding books with inconsistent source_book naming" above for the
+  incident that prompted it). Re-run with the existing value to keep the
+  book's recipes together, or pass `--allow-book-title-mismatch` if
+  you're deliberately renaming it.
+- `--allow-book-title-mismatch` — skips that check. Only needed for a
+  deliberate rename; the old and new recipes will show as two different
+  books in the app until you reconcile them by hand (or with a follow-up
+  script once `find_inconsistent_book_titles.py` shows the shape of it).
 - `--db` (required) — normally `~/recipe-app/recipes.db`.
 - `--pages-per-chunk` (default **7**, locked in 2026-09-28 -- see
   "Reprocessing a book with different chunk settings" below for why a

@@ -385,6 +385,33 @@ def insert_recipe(conn, recipe, book_title, source_path, page_start, page_end, e
     return cursor.lastrowid
 
 
+def check_book_title_consistency(conn, book_title: str, source_path: str) -> bool:
+    """Guards against the exact drift that split "The Christmas Chronicles"
+    across two source_book values in the UI: re-running extraction against
+    the same resolved PDF path with a differently worded --book-title (an
+    early, unparsed name, a typo, or just forgetting the "Author - Title"
+    convention the second time). If recipes already exist for this exact
+    source_path under a different source_book, refuses to proceed rather
+    than silently splitting one book across two names -- returns False and
+    prints what to do about it. Pass --allow-book-title-mismatch if this is
+    a deliberate rename."""
+    existing = conn.execute(
+        "SELECT DISTINCT source_book FROM recipes WHERE source_path = ?", (source_path,)
+    ).fetchall()
+    existing_titles = {row[0] for row in existing}
+    if existing_titles and book_title not in existing_titles:
+        print(f"ERROR: recipes already exist for this PDF under a different --book-title:", file=sys.stderr)
+        for title in sorted(existing_titles):
+            print(f"    {title!r}", file=sys.stderr)
+        print(f"  you passed:  {book_title!r}", file=sys.stderr)
+        print(f"  Re-run with --book-title set to the existing value above to keep this "
+              f"book's recipes together, or pass --allow-book-title-mismatch if you're "
+              f"intentionally renaming it (the old and new recipes will then show as two "
+              f"different books until you clean it up by hand).", file=sys.stderr)
+        return False
+    return True
+
+
 def resolve_pdf_path(pdf_arg: str, fullpath: bool) -> Path:
     """By default, --pdf takes just the book's name (the same "Author -
     Title" string you pass to --book-title) and resolves it inside
@@ -414,15 +441,23 @@ def main():
     ap.add_argument("--model", default="claude-sonnet-5", choices=list(PRICING_PER_MTOK))
     ap.add_argument("--resume", action="store_true", help="skip chunks already recorded in extraction_log")
     ap.add_argument("--sample", type=int, default=0, help="only process the first N chunks (smoke test)")
+    ap.add_argument("--allow-book-title-mismatch", action="store_true",
+                     help="skip the check that --book-title matches what's already on file for this PDF "
+                          "(only needed if you're deliberately renaming a book)")
     args = ap.parse_args()
 
     pdf_path = resolve_pdf_path(args.pdf, args.fullpath)
     if not pdf_path.exists():
         print(f"ERROR: file not found: {pdf_path}", file=sys.stderr)
         sys.exit(1)
+    source_path = str(pdf_path)
 
     conn = init_db(Path(args.db).expanduser())
     init_qc_table(conn)
+
+    if not args.allow_book_title_mismatch and not check_book_title_consistency(conn, args.book_title, source_path):
+        sys.exit(1)
+
     client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY from the environment
 
     print(f"Extracting text from {pdf_path.name} ...")
@@ -437,7 +472,6 @@ def main():
     total_input_tokens = 0
     total_output_tokens = 0
     total_recipes = 0
-    source_path = str(pdf_path)
 
     for chunk_index, page_start, page_end, chunk_text in tqdm(chunks, desc="Extract", unit="chunk"):
         if args.resume and already_done(conn, source_path, chunk_index):
