@@ -1319,8 +1319,17 @@ def unapprove_recipe(recipe_id: int, _: None = Depends(require_admin)):
     return RedirectResponse(url=f"/recipes/{recipe_id}", status_code=303)
 
 
-@app.delete("/recipes/{recipe_id}")
-def delete_recipe(recipe_id: int, _: None = Depends(require_admin)):
+def _delete_recipe_row(recipe_id: int):
+    """The single code path for "delete a recipe" -- removes the row from
+    recipes plus every row in the other three recipes.db tables that
+    reference it (recipe_reviews, recipe_qc_results, recipe_relations).
+    Used by both delete_recipe (the htmx Reject button on the review
+    queue list) and reject_recipe (a plain-form Reject button on the
+    recipe's own page, for a recipe that turns out not to be a recipe at
+    all once you're actually looking at it). See
+    documentation/PROJECT_HISTORY.md, "The delete_recipe fix that wasn't"
+    for why this needs to stay one function rather than two copies that
+    can drift apart."""
     conn = sqlite3.connect("recipes.db")
     cursor = conn.cursor()
     cursor.execute("DELETE FROM recipe_reviews WHERE recipe_id = ?", (recipe_id,))
@@ -1329,7 +1338,26 @@ def delete_recipe(recipe_id: int, _: None = Depends(require_admin)):
     cursor.execute("DELETE FROM recipes WHERE id = ?", (recipe_id,))
     conn.commit()
     conn.close()
+
+
+@app.delete("/recipes/{recipe_id}")
+def delete_recipe(recipe_id: int, _: None = Depends(require_admin)):
+    _delete_recipe_row(recipe_id)
     return Response(status_code=200)
+
+
+@app.post("/recipes/{recipe_id}/reject")
+def reject_recipe(recipe_id: int, _: None = Depends(require_admin)):
+    """Deletes a recipe straight from its own page while reviewing it --
+    for the case where it isn't actually a recipe at all (a chapter
+    intro, an ingredients list with no method, a misfired extraction) and
+    that's usually only obvious once you're looking at the whole thing,
+    not just its row in the review queue list. Same delete as the list's
+    Reject button, just reachable without going back to /review first.
+    Redirects to /review, since the recipe's own page no longer exists to
+    redirect back to."""
+    _delete_recipe_row(recipe_id)
+    return RedirectResponse(url="/review", status_code=303)
 
 
 if __name__ == "__main__":
