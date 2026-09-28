@@ -469,8 +469,9 @@ def _sort_pending_recipes(recipes, sort):
     it's a no-op; the others re-sort in place, relying on Python's stable
     sort to keep the existing source_book/id ordering as a tiebreak.
     Recipes with no QC checks recorded yet always sort last under a
-    QC-score sort, in either direction, since there's nothing to rank
-    them by until recipe_qc.py has actually run against them."""
+    QC-score sort, and recipes with no extracted_at (e.g. added by hand,
+    not through the extraction pipeline) always sort last under a date
+    sort, in either direction, since there's nothing to rank them by."""
     if sort == "book_desc":
         recipes.sort(key=lambda r: (r["source_book"] or "").lower(), reverse=True)
     elif sort in ("qc_asc", "qc_desc"):
@@ -481,6 +482,14 @@ def _sort_pending_recipes(recipes, sort):
             score = r["qc_passed"] / total
             return (0, -score if sort == "qc_desc" else score)
         recipes.sort(key=qc_key)
+    elif sort in ("date_asc", "date_desc"):
+        # extracted_at is stored as an ISO-ish "YYYY-MM-DD HH:MM:SS" string,
+        # so plain string comparison already sorts it chronologically --
+        # no need to parse it into a datetime first.
+        dated = [r for r in recipes if r.get("extracted_at")]
+        undated = [r for r in recipes if not r.get("extracted_at")]
+        dated.sort(key=lambda r: r["extracted_at"], reverse=(sort == "date_desc"))
+        recipes[:] = dated + undated
     return recipes
 
 
@@ -489,7 +498,7 @@ def get_pending_recipes(sort: str = "book_asc"):
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT id, title, source_book, engine, flagged_for_review
+        SELECT id, title, source_book, engine, flagged_for_review, extracted_at
         FROM recipes
         WHERE status != 'approved'
         ORDER BY source_book, id

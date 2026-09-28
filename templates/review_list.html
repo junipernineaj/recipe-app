@@ -4,7 +4,7 @@
 {% endmacro %}
 
 <div class="review-sort-row">
-    Sort by: {{ sort_link('book', 'Book') }} &middot; {{ sort_link('qc', 'QC score') }}
+    Sort by: {{ sort_link('book', 'Book') }} &middot; {{ sort_link('qc', 'QC score') }} &middot; {{ sort_link('date', 'Extracted') }}
 </div>
 
 <ul id="review-list">
@@ -12,7 +12,7 @@
     <li>
         <div class="recipe-info">
             <a href="/recipes/{{ recipe['id'] }}">{{ recipe["title"] | titlecase }}</a>
-            <span class="source">{{ recipe["source_book"] }}{% if recipe["engine"] %} &middot; {{ recipe["engine"] }}{% endif %}</span>
+            <span class="source">{{ recipe["source_book"] }}{% if recipe["engine"] %} &middot; {{ recipe["engine"] }}{% endif %}{% if recipe["extracted_at"] %} &middot; extracted {{ recipe["extracted_at"][:16] }} UTC{% endif %}</span>
             {% if recipe["flagged_for_review"] %}
             <p class="flag-note">&#9888; {{ recipe["flagged_for_review"] }}</p>
             {% endif %}

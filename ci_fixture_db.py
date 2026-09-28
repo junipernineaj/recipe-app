@@ -45,13 +45,14 @@ def build_recipes_db():
             instructions TEXT,
             status TEXT NOT NULL DEFAULT 'approved',
             engine TEXT,
-            flagged_for_review TEXT
+            flagged_for_review TEXT,
+            extracted_at TEXT
         )
     """)
     conn.execute(
         """INSERT INTO recipes
-           (title, source_book, source_path, source_page, ingredients, instructions, status, engine)
-           VALUES (?, ?, ?, ?, ?, ?, 'approved', 'ci-fixture')""",
+           (title, source_book, source_path, source_page, ingredients, instructions, status, engine, extracted_at)
+           VALUES (?, ?, ?, ?, ?, ?, 'approved', 'ci-fixture', datetime('now'))""",
         (
             "CI Fixture Recipe",
             "CI Test Author - CI Test Cookbook",

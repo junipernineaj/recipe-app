@@ -10,7 +10,7 @@
         <a class="back-link" href="/">&larr; Back to all recipes</a>
         <div class="recipe-header">
             <h1>{{ recipe["title"] | titlecase }}</h1>
-            <p class="source">From: {{ recipe["source_book"] }}{% if recipe["engine"] %} &middot; extracted by {{ recipe["engine"] }}{% endif %}</p>
+            <p class="source">From: {{ recipe["source_book"] }}{% if recipe["engine"] %} &middot; extracted by {{ recipe["engine"] }}{% endif %}{% if recipe["extracted_at"] %} &middot; {{ recipe["extracted_at"][:16] }} UTC{% endif %}</p>
             {% if recipe["source_path"] and recipe["source_page"] %}
             <a href="/recipes/{{ recipe['id'] }}/source#page={{ recipe['source_page'] }}" target="_blank" rel="noopener" class="btn">
                 &#128196; View original page{% if recipe['source_page_end'] and recipe['source_page_end'] != recipe['source_page'] %}s {{ recipe['source_page'] }}&ndash;{{ recipe['source_page_end'] }}{% else %} {{ recipe['source_page'] }}{% endif %}
