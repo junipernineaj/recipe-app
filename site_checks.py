@@ -117,7 +117,7 @@ def check_htmx_loaded_where_needed(client):
 
 
 def check_public_pages_load(client):
-    for path in ["/", "/books", "/authors", "/search?q=test"]:
+    for path in ["/", "/books", "/authors", "/search?q=test", "/feedback"]:
         r = client.get(path)
         if r.status_code != 200:
             return False, f"{path} returned {r.status_code}, expected 200"
@@ -127,7 +127,7 @@ def check_public_pages_load(client):
 def check_admin_pages_reject_anonymous(client):
     # Deliberately doesn't include /unit-tests: that route calls run_all()
     # itself, so checking it from inside a check would recurse.
-    for path in ["/review", "/qc-issues"]:
+    for path in ["/review", "/qc-issues", "/feedback/inbox"]:
         r = client.get(path, follow_redirects=False)
         if r.status_code not in (401, 403):
             return False, f"{path} returned {r.status_code} with no admin header, expected 401/403"
@@ -139,7 +139,7 @@ def check_admin_pages_load_for_admin(client):
     if not headers:
         return True, "skipped -- ADMIN_EMAILS isn't set in this environment"
     # Deliberately doesn't include /unit-tests -- see the comment above.
-    for path in ["/review", "/qc-issues"]:
+    for path in ["/review", "/qc-issues", "/feedback/inbox"]:
         r = client.get(path, headers=headers)
         if r.status_code != 200:
             return False, f"{path} returned {r.status_code} with a valid admin header, expected 200"

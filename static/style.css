@@ -410,3 +410,53 @@ form button[type="submit"]:hover { background: #626c40; }
 }
 .review-list li:last-child { border-bottom: none; }
 .review-list p { margin: 0.35rem 0 0; color: var(--brown-dark); }
+
+.feedback-kind-select {
+    width: 100%;
+    margin-top: 0.35rem;
+    padding: 0.55rem 0.75rem;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-family: inherit;
+    font-size: 0.95rem;
+    background: #fff;
+    color: var(--brown-dark);
+}
+.feedback-kind-select:focus { outline: none; border-color: var(--terracotta); }
+
+#feedback-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.9rem; }
+#feedback-list li {
+    background: var(--cream-card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1rem 1.1rem;
+    box-shadow: var(--shadow);
+}
+#feedback-list li.empty-state {
+    background: none;
+    border: none;
+    box-shadow: none;
+    display: block;
+    text-align: center;
+    color: var(--brown-mid);
+    padding: 2rem 0;
+}
+
+.feedback-meta { font-size: 0.85rem; color: var(--brown-mid); }
+.feedback-meta a { color: var(--brown-mid); text-decoration: underline; }
+.feedback-message { margin: 0.6rem 0; white-space: pre-wrap; color: var(--brown-dark); }
+.feedback-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+
+.feedback-tag {
+    display: inline-block;
+    padding: 0.3rem 0.7rem;
+    border-radius: 999px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    text-transform: capitalize;
+}
+.feedback-kind-bug { background: #e8c7c0; color: #7a2e1d; }
+.feedback-kind-feature { background: #cfe0b8; color: #3f5222; }
+.feedback-status-new { background: #f3d9a4; color: #6b4a00; }
+.feedback-status-done { background: #b8d4c8; color: #1f4a3a; }
+.feedback-status-dismissed { background: var(--border); color: var(--brown-mid); }
