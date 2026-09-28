@@ -13,9 +13,11 @@ it instead.
 - **`~/cookbook-project/venv`** — for the pipeline stages and
   `weekly_refresh.sh` in `pipeline/`.
 - **No venv needed at all** for `recipe_qc.py`, `find_duplicate_books.py`,
-  `remove_books_by_path_prefix.py`, or `remove_book_recipes.py` — all four
-  are pure stdlib (`argparse`/`re`/`sqlite3`/`hashlib`), so plain `python3`
-  works from anywhere as long as `--db` points at the real file.
+  `remove_books_by_path_prefix.py`, `remove_book_recipes.py`,
+  `find_inconsistent_book_titles.py`, or `rename_book_source_book.py` —
+  all six are pure stdlib (`argparse`/`re`/`sqlite3`/`hashlib`/`csv`), so
+  plain `python3` works from anywhere as long as `--db` points at the
+  real file.
 - `cd` into the right directory first: `uvicorn` needs to run from
   `~/recipe-app`, the pipeline stage scripts from `~/recipe-app/pipeline`.
 
@@ -294,7 +296,7 @@ book filter, the review queue, `/qc-issues`).
   the home page's book filter after extracting a new book, since nothing
   currently checks this automatically.
 
-## Extracting recipes from a book (Phase 2)
+## Extracting recipes from a book
 
 Two interchangeable scripts, both writing into the same `recipes.db` with
 the same schema and the same chunking logic -- see "Reprocessing a book

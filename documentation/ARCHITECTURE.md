@@ -8,7 +8,10 @@ databases" below):
 1. **The pipeline** (`pipeline/*.py`) — turns a folder of scanned cookbook
    PDFs into OCR'd, compressed, searchable copies.
 2. **The web app** (`main.py`, `templates/`) — a FastAPI + HTMX site that
-   browses the resulting library and (eventually) individual recipes.
+   browses the resulting library, and hosts the extracted recipes
+   themselves — extraction, an admin review queue with QC checks, and the
+   recipe pages readers actually see (see "Recipe extraction, review, and
+   QC" below).
 
 **For the actual commands** — how to run any of the above, start the web
 app, or use one of the ad hoc maintenance scripts, with their flags and
@@ -128,7 +131,7 @@ The web app's own database — extracted recipe content and everything
 built on top of it. Referenced by a relative `sqlite3.connect("recipes.db")`
 throughout `main.py` and the pipeline's extraction scripts, so it's always
 wherever the process's working directory is (`~/recipe-app` for the app
-itself). Four tables:
+itself). Five tables:
 
 - **`recipes`** — one row per extracted (or manually-added) recipe.
   Like `inventory.excluded`, its schema has grown by hand over time rather
@@ -143,12 +146,17 @@ itself). Four tables:
   `title`, `source_book`, `source_path`, `source_page` /
   `source_page_end`, `ingredients`, `instructions` (both newline-separated
   text, not JSON), `servings`, `prep_time`, `cook_time`, `notes`, `status`
-  (`pending` at extraction -> `approved` via the review queue — there's
-  no `rejected` state; rejecting a recipe deletes the row outright, see
+  (`pending` at extraction -> `approved` via the review queue — an
+  approved recipe can also go back to `pending` via the "Unapprove"
+  button on its own page, see "The web app" below — there's no
+  `rejected` state; rejecting a recipe deletes the row outright, see
   `delete_recipe` below), `engine` (which extraction pathway produced it,
-  e.g. `claude-api` vs. a local-model run), and `flagged_for_review` (the
-  extraction model's own "this looked off" note, also surfaced as one of
-  the QC checks below).
+  e.g. `claude-api` vs. a local-model run), `extracted_at` (UTC timestamp,
+  set once at extraction time — drives the review queue's date filter and
+  the "extracted <date>" line on a recipe's own page; older recipes
+  extracted before this column existed are simply `NULL`, shown as "No
+  extraction date"), and `flagged_for_review` (the extraction model's own
+  "this looked off" note, also surfaced as one of the QC checks below).
 - **`recipe_reviews`** — one row per `(recipe_id, user_email)`, created
   automatically on app startup (`init_recipe_reviews_table()` in
   `main.py`). `made_it` (0/1), `rating` (1-5), `review_text`. Re-submitting
@@ -173,6 +181,16 @@ itself). Four tables:
   `acknowledged` (0/1) lets a human-confirmed false positive on an
   advisory check stay cleared until the underlying detail text changes or
   the check starts passing outright.
+- **`site_feedback`** (added 2026-09-28) — bug reports and feature ideas
+  submitted through `/feedback` by anyone who reaches the site, created
+  automatically on startup (`init_feedback_table()` in `main.py`). Not
+  tied to any recipe by foreign key — it's a standalone inbox, not
+  per-recipe data — so it's the one table `delete_recipe` doesn't need to
+  touch. `user_email` (attributed the same way as a recipe review, via
+  `current_user_email(request)` — see "Recipe reviews" below), `kind`,
+  `message`, `page_url` (whatever page the report was submitted from),
+  `status` (`new` -> `done`/`dismissed`, triaged from the admin-only
+  `/feedback/inbox` page), `created_at`.
 
 `delete_recipe` cleans up matching rows in all three of the other tables
 whenever a recipe is deleted, so there's no equivalent of `inventory`'s
@@ -311,6 +329,53 @@ infers or extracts a value.
   still typed by hand each run. This only cleans up how a book is
   *displayed* afterward, not how it's *extracted*.
 
+## Keeping `source_book` consistent
+
+`source_book` (see `recipes.db` above) is typed by hand at extraction
+time via `--book-title`, with no validation against what's already in the
+database — nothing stops the same book ending up under two different
+strings, or under one consistent string that's just wrong. Two distinct
+failure modes turned up in practice (2026-09-28), and they need different
+fixes:
+
+- **The same book, split across two `source_book` values** — e.g. a typo,
+  or the same book re-extracted later with a differently-typed title (the
+  "Christmas Chronicles" incident: an older, smaller extraction and a
+  newer, larger one ended up as two separate entries in the home page's
+  book filter). Caught by `pipeline/find_inconsistent_book_titles.py`, a
+  read-only diagnostic that groups recipes by the underlying file (via
+  `inventory`, the same path-chasing `_build_inventory_title_author_lookup()`
+  does — see "Book titles and authors, set by hand" above) and flags any
+  file with more than one distinct `source_book` string across its
+  recipes. Since the tool can't tell a genuine re-extraction from a typo
+  by itself, it reports counts and dates for each variant and leaves the
+  call to a human — merge (rename one variant onto the other) or delete
+  the stale set entirely (`pipeline/remove_book_recipes.py`), whichever
+  the report shows is actually going on. See `RUNBOOK.md` → "Finding
+  books with inconsistent source_book naming" for the exact commands.
+- **A book stored consistently, but in the wrong order** — "Title -
+  Author" instead of the "Author - Title" convention (the "Japaneasy"
+  incident: `"Japaneasy - Tim Anderson"`, imported before this convention
+  was settled). Not catchable by the tool above, since there's no
+  internal disagreement to flag — every recipe from that book agrees with
+  itself, just wrongly. Fixed one book at a time with
+  `pipeline/rename_book_source_book.py --old-name ... --new-name ...`,
+  which warns (rather than silently merging) if the new name already has
+  recipes under it. See `RUNBOOK.md` → "rename_book_source_book.py".
+- **Prevention going forward:** `extract_recipes.py` and
+  `extract_recipes_local.py` both call `check_book_title_consistency()`
+  before doing any extraction work (right after `init_db()`, before the
+  Anthropic client is even created, so a mismatch fails fast) — if
+  `--book-title` doesn't match what's already on file for that book's
+  path in `inventory`, the run refuses to start rather than silently
+  planting a second inconsistent value. `--allow-book-title-mismatch`
+  overrides this for the rare case where the mismatch is intentional
+  (e.g. deliberately renaming a book going forward).
+
+Both `find_inconsistent_book_titles.py` and `rename_book_source_book.py`
+are pure-stdlib, like `remove_book_recipes.py` — no venv needed (see
+`RUNBOOK.md`'s "No venv needed at all" list).
+
 ## The web app
 
 - `main.py` connects directly to `~/cookbook-project/inventory.sqlite` for
@@ -374,14 +439,31 @@ How it works:
   if that ever changes, the fix is either binding back to `127.0.0.1`
   (loses direct-LAN access) or switching to verifying Cloudflare's JWT
   (`Cf-Access-Jwt-Assertion`) instead of trusting the plain header.
-- Gated routes: `GET`/`POST /recipes/{id}/edit`, `POST
-  /recipes/{id}/approve`, `DELETE /recipes/{id}`, `POST /books/exclude`,
-  `GET`/`POST /recipes/new` (adding a recipe by hand), the `/review`
-  queue itself, and `GET /books/edit-title-author` / `GET
-  /books/title-author-display` / `POST /books/set-title-author` (see
-  "Book titles and authors, set by hand" above). Viewing a recipe that
-  hasn't been approved yet (`GET /recipes/{id}`) also 403s for
-  non-admins, even via a direct link.
+- Gated routes, by area (this list is easy to let go stale as new admin
+  features get added — if in doubt, `grep` `main.py` for
+  `Depends(require_admin)` rather than trusting it blindly):
+  - **Recipes:** `GET`/`POST /recipes/new` (adding one by hand), `GET`/
+    `POST /recipes/{id}/edit`, `POST /recipes/{id}/approve`, `POST
+    /recipes/{id}/unapprove` (puts an approved recipe back into the
+    review queue), `DELETE /recipes/{id}`.
+  - **QC:** `POST /recipes/{id}/qc/{check_name}/ack` (acknowledge an
+    advisory check as a false positive), `POST /recipes/{id}/qc/rerun`,
+    `GET /qc-issues`.
+  - **Review queue and tests:** the `/review` queue itself, `GET
+    /unit-tests`, `POST /unit-tests/run`.
+  - **Feedback:** `GET /feedback/inbox`, `POST
+    /feedback/{feedback_id}/status` (see "Feedback" below) — note
+    `GET`/`POST /feedback` itself, for *submitting* feedback, is
+    deliberately open to anyone, same spirit as recipe reviews.
+  - **Books:** `POST /books/exclude`, `POST /books/mark-extracted`, `GET
+    /books/edit-title-author` / `GET /books/title-author-display` / `POST
+    /books/set-title-author` (see "Book titles and authors, set by hand"
+    above).
+
+  Viewing a recipe that hasn't been approved yet (`GET /recipes/{id}`)
+  also 403s for non-admins, even via a direct link — that one isn't a
+  blanket `Depends(require_admin)`, it's a conditional check inside the
+  route (approved recipes are open to everyone, pending ones aren't).
 - Templates receive `is_admin` in their context and hide the
   corresponding buttons/links client-side — that's convenience, not the
   actual security boundary, which is the server-side `require_admin`
@@ -417,6 +499,29 @@ How it works:
   reached some way that bypasses Cloudflare Access, which per "Admin
   access control" above is only a real possibility from the home LAN
   directly, not from the public URL.
+
+## Feedback
+
+Added 2026-09-28. `GET`/`POST /feedback` is a small bug-report/feature-idea
+form, open to anyone who reaches the site — same trust model as recipe
+reviews (see above): attributed via `current_user_email(request)` when
+Cloudflare Access supplies an email, but not gated on it, since the point
+is a low-friction way to flag something without needing to be an admin.
+
+- Each submission is one row in `site_feedback` (`recipes.db` — see
+  "The two databases" above), with a `kind` (bug vs. idea), the free-text
+  `message`, the `page_url` the report was submitted from (so "the review
+  queue filters are broken" doesn't require also explaining where that
+  is), and `status`, starting at `new`.
+- `GET /feedback/inbox`, admin-only, lists everything with unresolved
+  (`new`) items sorted ahead of triaged ones so there's always something
+  to act on at the top, rather than scrolling past resolved items sorted
+  purely by date. `POST /feedback/{feedback_id}/status` moves an item to
+  `done` or `dismissed`. `get_open_feedback_count()` (used wherever the
+  inbox link needs an unread-style count) counts rows still at `new`.
+- No editing or deleting a submission once made, by design — it's a
+  lightweight paper trail, not a ticket system; dismissing a wrong or
+  stale item is enough.
 
 ## Continuous integration
 
@@ -460,15 +565,53 @@ there too.
 See `RUNBOOK.md` → "Running the site checks locally" to run this same
 check yourself, in a scratch checkout, before pushing.
 
-## Phase 2 (not started): recipe extraction
+## Recipe extraction, review, and QC
 
-Longer-term, individual recipes get extracted out of these digitized
-books into the `recipes` table/UI that already exists for manual entry.
-Not yet designed — flagged here so future-you remembers it's the next
-big phase, not forgotten scope.
+This used to be logged here as "Phase 2 (not started)". It's since gone
+from an idea to the bulk of what this app actually does day to day —
+700+ recipes across two extraction engines, a review queue with sort and
+filter, a seven-check QC system, and the book-naming consistency tooling
+described above. This section is the "how it fits together" overview;
+`RUNBOOK.md` has the actual commands.
 
-A separate, smaller idea logged for that phase: many filenames are messy
-(e.g. `...toOCR` suffixes) and shouldn't be used as the display title for
-extracted recipes. The plan agreed on was a `clean_title` column on
-`inventory` (a display alias) rather than renaming files on disk, since
-`inventory.path` is a primary key joined across tables.
+- **Two extraction engines**, both driven by hand (not part of the
+  automated Stage 1-3 pipeline above): `pipeline/extract_recipes.py`
+  (calls the Anthropic API) and `pipeline/extract_recipes_local.py` (a
+  local-model run) — same shared logic for reading a book's OCR'd text,
+  walking it page by page, and writing rows into `recipes.db`, different
+  only in which model actually does the extraction. Both take
+  `--book-title` (see "Keeping `source_book` consistent" above for the
+  consistency guard this now runs through) and write `engine` on every
+  row it creates, so `/review` and a recipe's own page can always show
+  which pathway produced it.
+- Every newly-extracted recipe starts at `status = 'pending'` and
+  `pipeline/recipe_qc.py` (via `init_qc_table()`, called on app startup)
+  runs its seven checks against it (see `recipes.db` → `recipe_qc_results`
+  above for the full list) — a recipe can be reviewed before or after QC
+  has run, but the QC badge on `/review` and the recipe's own page is
+  what usually decides whether it's worth a close look at all.
+- **The review queue (`/review`, admin-only)** lists everything still
+  `pending`. Sortable by book, QC score, or extraction date (ascending/
+  descending, toggled by clicking the same column again), and
+  independently filterable by exact book, exact QC score (including "no
+  QC data yet" for anything predating the QC system), and extraction date
+  — day only, ignoring time (including "no extraction date" for anything
+  predating the `extracted_at` column) — filters and sort combine, and
+  both are carried through every link on the page so paging around
+  doesn't silently reset them. Approving moves a recipe to `status =
+  'approved'` (live on the site); rejecting deletes the row outright (see
+  `delete_recipe` above) — there's no `rejected` state.
+- **Unapproving (added 2026-09-28)** — `POST /recipes/{id}/unapprove`,
+  a button on an approved recipe's own page, puts it back to `status =
+  'pending'` so it shows up in the review queue again. For a recipe
+  approved too hastily and worth a second look (a QC issue spotted
+  later, or just a change of mind) — it lands back on the recipe's own
+  page rather than jumping to `/review`, since unapproving is usually the
+  first step toward fixing something on that exact recipe, not a
+  queue-clearing action.
+- A separate, smaller idea logged here previously and still unbuilt: many
+  filenames are messy (e.g. `...toOCR` suffixes) and shouldn't be used as
+  the display title for extracted recipes. The plan agreed on was a
+  `clean_title` column on `inventory` (a display alias) rather than
+  renaming files on disk, since `inventory.path` is a primary key joined
+  across tables.
