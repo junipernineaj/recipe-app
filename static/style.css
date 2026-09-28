@@ -177,6 +177,45 @@ a:hover { text-decoration: underline; }
 }
 .delete-btn:hover { background: var(--terracotta); border-color: var(--terracotta); color: #fff; }
 
+.review-banner {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+    margin: 1.1rem 0 1.5rem;
+}
+.review-banner form { display: contents; }
+.review-banner .flag-note { flex-basis: 100%; }
+
+/* Being inside a <form> otherwise pulls Unapprove into the olive
+   "form button[type=submit]" default further down this file (higher
+   specificity than .delete-btn alone) -- pin it back to its intended
+   muted outline look, unrelated to today's Approve/Reject colors. */
+.review-banner button.delete-btn {
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--brown-mid);
+}
+.review-banner button.delete-btn:hover {
+    background: var(--terracotta);
+    border-color: var(--terracotta);
+    color: #fff;
+}
+
+.review-banner button.approve-btn, .review-banner button.reject-btn {
+    border: none;
+    padding: 0.6rem 1.1rem;
+    border-radius: 8px;
+    font-size: 0.95rem;
+    color: #fff;
+    cursor: pointer;
+    transition: background 0.15s ease;
+}
+.review-banner button.approve-btn { background: var(--olive); }
+.review-banner button.approve-btn:hover { background: #626c40; }
+.review-banner button.reject-btn { background: var(--terracotta); }
+.review-banner button.reject-btn:hover { background: var(--terracotta-dark); }
+
 .recipe-header .source { color: var(--brown-mid); font-style: italic; margin-bottom: 1.5rem; }
 
 .recipe-section {
