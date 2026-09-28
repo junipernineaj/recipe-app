@@ -175,10 +175,14 @@ itself). Four tables:
   the check starts passing outright.
 
 `delete_recipe` cleans up matching rows in all three of the other tables
-whenever a recipe is deleted — this wasn't always true (see
+whenever a recipe is deleted, so there's no equivalent of `inventory`'s
+ghost-row problem here, as long as deletion keeps going through that one
+code path. This took two attempts to actually land — see
 `documentation/PROJECT_HISTORY.md`, "Catching a real bug on the very
-first run"), so there's no equivalent of `inventory`'s ghost-row problem
-here, as long as deletion keeps going through that one code path.
+first run" and "The delete_recipe fix that wasn't" — so if orphaned
+`recipe_reviews`/`recipe_qc_results` rows ever turn up again on
+`/unit-tests`, check `delete_recipe` in `main.py` directly rather than
+trusting this paragraph.
 
 ## Two separate venvs — don't mix them up
 

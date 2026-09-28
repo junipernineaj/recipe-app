@@ -395,6 +395,37 @@ cleans up what's displayed afterward. Tested with fixtures covering both
 the resolved and fallback paths, plus the OCR/compress path-chasing.
 Tested and confirmed working.
 
+## 2026-09-28 — The delete_recipe fix that wasn't
+
+While building `remove_book_recipes.py` (a whole-book version of
+`delete_recipe`, for cleanly reprocessing a book at a different
+`--pages-per-chunk` -- see "Reprocessing a book with different chunk
+settings" in `RUNBOOK.md`), checked the existing single-recipe
+`delete_recipe()` route to generalize its cleanup logic, and found it
+still only deleted from `recipe_relations` -- `recipe_qc_results` and
+`recipe_reviews` were untouched, exactly the bug the "Catching a real bug
+on the very first run" entry above says was already fixed on 2026-09-27.
+
+It wasn't. Commit `c67a705`, titled "Fix delete_recipe leaving orphaned QC
+and review rows behind" and carrying a message that matches that entry
+almost word for word, is on record and pushed to `origin/master` -- but
+its actual diff is 34 pure insertions to `main.py`, and every one of them
+is the new `/unit-tests` and `/unit-tests/run` admin routes. Nothing in
+that commit touches `delete_recipe` at all. Whatever the intended fix was,
+it never made it into the commit that claimed to be it -- the one-off
+cleanup of the 15 rows already orphaned in production may well have
+happened as a separate manual step (no way to confirm that from git
+history alone), but the code fix did not, so any recipe deleted between
+2026-09-27 and today kept right on leaving fresh orphaned rows behind.
+
+Applied the actual fix this time: `delete_recipe()` now deletes from
+`recipe_reviews` and `recipe_qc_results` too, before `recipe_relations`
+and the recipe row itself. Worth running `/unit-tests` against the real
+production database once this is deployed, to see the current orphaned-
+row count and confirm it's clean going forward -- if it's nonzero, that's
+the roughly-one-day backlog this gap left behind, not a sign the new fix
+didn't take.
+
 ---
 
 *Still on the list, deliberately deferred: Tier 2 (the LLM-based semantic

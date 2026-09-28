@@ -1087,6 +1087,8 @@ def approve_recipe(recipe_id: int, _: None = Depends(require_admin)):
 def delete_recipe(recipe_id: int, _: None = Depends(require_admin)):
     conn = sqlite3.connect("recipes.db")
     cursor = conn.cursor()
+    cursor.execute("DELETE FROM recipe_reviews WHERE recipe_id = ?", (recipe_id,))
+    cursor.execute("DELETE FROM recipe_qc_results WHERE recipe_id = ?", (recipe_id,))
     cursor.execute("DELETE FROM recipe_relations WHERE recipe_id = ? OR related_recipe_id = ?", (recipe_id, recipe_id))
     cursor.execute("DELETE FROM recipes WHERE id = ?", (recipe_id,))
     conn.commit()

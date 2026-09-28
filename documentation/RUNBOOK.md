@@ -13,9 +13,9 @@ it instead.
 - **`~/cookbook-project/venv`** — for the pipeline stages and
   `weekly_refresh.sh` in `pipeline/`.
 - **No venv needed at all** for `recipe_qc.py`, `find_duplicate_books.py`,
-  or `remove_books_by_path_prefix.py` — all three are pure stdlib
-  (`argparse`/`re`/`sqlite3`/`hashlib`), so plain `python3` works from
-  anywhere as long as `--db` points at the real file.
+  `remove_books_by_path_prefix.py`, or `remove_book_recipes.py` — all four
+  are pure stdlib (`argparse`/`re`/`sqlite3`/`hashlib`), so plain `python3`
+  works from anywhere as long as `--db` points at the real file.
 - `cd` into the right directory first: `uvicorn` needs to run from
   `~/recipe-app`, the pipeline stage scripts from `~/recipe-app/pipeline`.
 
@@ -229,6 +229,86 @@ venv at all.
   `find_duplicate_books.py` is what surfaced the pattern (a cluster of
   hash-identical books), and `remove_books_by_path_prefix.py` cleaned up
   the leftover rows once the folder's former path was known.
+
+## Reprocessing a book with different chunk settings
+
+If a book's recipe coverage looks thin, the first thing to check is what
+`--pages-per-chunk` it was extracted with (default 15). Smaller chunks
+tend to catch more: `extract_recipes.py`'s `call_claude()` gives each
+chunk a token budget (16000, doubling to a max of 32000 if the model's
+response gets cut off mid-JSON) and retries a truncated or unparseable
+response up to twice more -- but if all three attempts still fail, the
+whole chunk is abandoned and returns no recipes at all, silently. A denser
+15-page chunk is more likely to blow that budget than an 8-page one, so
+the failure mode isn't "a few recipes missed" -- it's "every recipe in
+that chunk, gone."
+
+**Don't just re-run with `--resume` at a smaller chunk size.** `--resume`
+skips any `(source_path, chunk_index, engine)` already in
+`extraction_log` -- and `chunk_index` is just `i // pages_per_chunk`, a
+plain sequential counter with no page numbers in it. Chunk 0 exists in
+the log whether it was a 15-page or an 8-page run, so `--resume` at a new
+chunk size will wrongly treat early chunks as already done and skip
+re-extracting them, even though they cover completely different page
+ranges than before. `--resume` is only safe when the chunk size hasn't
+changed.
+
+There's also no dedup on insert: `insert_recipe()` unconditionally adds
+every recipe a chunk returns, so re-extracting without clearing the old
+rows first just piles new rows on top of the old ones rather than
+replacing them.
+
+Two ways to handle this, both using `pipeline/remove_book_recipes.py`
+(dry run by default -- always look at the report before `--apply`):
+
+**Compare side-by-side (recommended)** -- re-extract straight into the
+live database and let the review queue be the reconciliation step:
+
+```
+cd ~/recipe-app/pipeline
+python3 extract_recipes.py --db ~/recipe-app/recipes.db \
+    --book-title "Author - Title" --pdf /path/to/the.pdf \
+    --pages-per-chunk 8
+```
+
+No `--resume` -- this is a fresh pass over the whole book. The newly
+extracted recipes land with `status='pending'` alongside the book's
+existing `approved` ones (nothing already live is touched or hidden), so
+both sets are visible in the review queue at once. Go through them,
+approve whichever version of each recipe is better (usually the new one,
+if the old one was missing entirely -- but check for the reverse too,
+since a smaller chunk can occasionally split a recipe awkwardly across a
+chunk boundary), and once you've picked winners, clear out the losing
+`pending` duplicates:
+
+```
+python3 remove_book_recipes.py --book "Author - Title" --status pending
+python3 remove_book_recipes.py --book "Author - Title" --status pending --apply
+```
+
+`--status pending` leaves the approved recipes (winners) and
+`extraction_log` untouched -- there's nothing left to resume, so no
+reason to clear the log.
+
+**Clean replace** -- if you'd rather not review two overlapping sets at
+all and just trust the smaller chunk size outright, clear everything for
+the book first (recipes, reviews, QC results, relations, *and*
+`extraction_log`, so `chunk_index` starts meaning something again), then
+extract fresh:
+
+```
+python3 remove_book_recipes.py --book "Author - Title"
+python3 remove_book_recipes.py --book "Author - Title" --apply --clear-extraction-log
+
+cd ~/recipe-app/pipeline
+python3 extract_recipes.py --db ~/recipe-app/recipes.db \
+    --book-title "Author - Title" --pdf /path/to/the.pdf \
+    --pages-per-chunk 8
+```
+
+Everything still lands as `pending` and needs the usual review-queue pass
+before it's visible on the site -- this skips the side-by-side comparison,
+not the review step.
 
 ## Running the site checks locally, before pushing
 
