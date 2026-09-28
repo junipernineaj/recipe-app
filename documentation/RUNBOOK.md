@@ -239,30 +239,45 @@ behave the way they do, and the `engine` column on `recipes` for how
 recipes from either one are told apart afterward. Needs the
 `~/cookbook-project/venv` (same one the pipeline stages above use).
 
+Both scripts take `--pdf` as just the book's name (the same "Author -
+Title" string you pass to `--book-title`), not a full path. It resolves
+inside `/media/aj9/Juniper13/cookbook_ocr_compressed` with `.pdf` appended
+automatically, since that's where every book actually lives. Pass
+`--fullpath` if you genuinely need to point at a PDF somewhere else, in
+which case `--pdf` is used exactly as given.
+
 ### `extract_recipes.py` — via the Claude API
 
 ```
 export ANTHROPIC_API_KEY=sk-ant-...
 cd ~/recipe-app/pipeline
 python3 extract_recipes.py --db ~/recipe-app/recipes.db \
-    --book-title "Author - Title" --pdf "/path/to/the.pdf" \
+    --book-title "Author - Title" --pdf "Author - Title" \
     --resume
 ```
 
-Book filenames always have spaces in them ("Author - Title.pdf"), so
-**quote both `--pdf` and `--book-title`** — an unquoted `--pdf` path gets
-split by the shell into separate words, and argparse fails with a
-confusing "unrecognized arguments" error naming whatever came after the
-first space, not a helpful "path not found."
+Book names always have spaces in them ("Author - Title"), so **quote both
+`--pdf` and `--book-title`** — an unquoted value gets split by the shell
+into separate words, and argparse fails with a confusing "unrecognized
+arguments" error naming whatever came after the first space, not a
+helpful "not found." This still applies now that `--pdf` is just a name
+rather than a full path -- shorter, but the spaces (and the need to quote
+around them) haven't gone anywhere.
 
 Flags:
-- `--pdf` (required) — the book's PDF. The compressed copy is fine.
+- `--pdf` (required) — the book's name, resolved inside
+  `/media/aj9/Juniper13/cookbook_ocr_compressed` with `.pdf` appended. A
+  trailing `.pdf` you include yourself is tolerated (stripped, then
+  re-added), so passing the filename doesn't double up.
+- `--fullpath` — treat `--pdf` as a full path instead of a name inside
+  that folder, for a PDF that lives somewhere else.
 - `--book-title` (required) — display name stored as `source_book`,
   "Author - Title" convention.
 - `--db` (required) — normally `~/recipe-app/recipes.db`.
-- `--pages-per-chunk` (default 15) — see "Reprocessing a book with
-  different chunk settings" below for why a smaller value often catches
-  more, at the cost of more API calls.
+- `--pages-per-chunk` (default **7**, locked in 2026-09-28 -- see
+  "Reprocessing a book with different chunk settings" below for why a
+  smaller value catches recipes a larger one silently drops, at the cost
+  of more API calls).
 - `--model` (default `claude-sonnet-5`; also accepts
   `claude-haiku-4-5-20251001`) — real, measured cost per book comes
   straight from the API's own token usage, printed at the end of the run,
@@ -285,20 +300,20 @@ real constraint is GPU time, so this reports elapsed time per chunk
 instead of a dollar figure. Requires Ollama running and reachable, with
 the model already pulled.
 
-**We default to `qwen3:14b`** — not the `qwen2.5:14b` the script itself
-falls back to if `--model` is left off, so always pass it explicitly:
+**Defaults to `qwen3:14b`** — settled on after comparing it against the
+script's original `qwen2.5:14b` fallback:
 
 ```
 cd ~/recipe-app/pipeline
 python3 extract_recipes_local.py --db ~/recipe-app/recipes.db \
-    --book-title "Author - Title" --pdf "/path/to/the.pdf" \
-    --model qwen3:14b --resume
+    --book-title "Author - Title" --pdf "Author - Title" \
+    --resume
 ```
 
 Flags (beyond the ones shared with `extract_recipes.py` above):
-- `--model` (script default: `qwen2.5:14b` — **pass `qwen3:14b`
-  explicitly**, per above) — an Ollama model tag; must already be pulled
-  (`ollama pull qwen3:14b`).
+- `--model` (default `qwen3:14b`) — an Ollama model tag; must already be
+  pulled (`ollama pull qwen3:14b`). Pass `--model qwen2.5:14b` (or
+  anything else you've pulled) to use a different one.
 - `--ollama-host` (default `http://localhost:11434`, i.e. Ollama running
   on junipernine2 itself) — only needs changing if pointing at a
   different machine, e.g. the local-AI box.
@@ -318,15 +333,17 @@ this section only covers what's different about running either one again
 on a book that's already been extracted once.
 
 If a book's recipe coverage looks thin, the first thing to check is what
-`--pages-per-chunk` it was extracted with (default 15). Smaller chunks
-tend to catch more: `extract_recipes.py`'s `call_claude()` gives each
-chunk a token budget (16000, doubling to a max of 32000 if the model's
-response gets cut off mid-JSON) and retries a truncated or unparseable
-response up to twice more -- but if all three attempts still fail, the
-whole chunk is abandoned and returns no recipes at all, silently. A denser
-15-page chunk is more likely to blow that budget than an 8-page one, so
-the failure mode isn't "a few recipes missed" -- it's "every recipe in
-that chunk, gone."
+`--pages-per-chunk` it was extracted with (default **7**, as of
+2026-09-28 -- it used to default to 15). Smaller chunks tend to catch
+more: `extract_recipes.py`'s `call_claude()` gives each chunk a token
+budget (16000, doubling to a max of 32000 if the model's response gets
+cut off mid-JSON) and retries a truncated or unparseable response up to
+twice more -- but if all three attempts still fail, the whole chunk is
+abandoned and returns no recipes at all, silently. A denser 15-page chunk
+is more likely to blow that budget than a 7-page one, so the failure mode
+isn't "a few recipes missed" -- it's "every recipe in that chunk, gone."
+7 was settled on after exactly this cost the Nigel Slater book its missing
+recipes at the old default.
 
 **Don't just re-run with `--resume` at a smaller chunk size.** `--resume`
 skips any `(source_path, chunk_index, engine)` already in
@@ -352,11 +369,13 @@ live database and let the review queue be the reconciliation step:
 ```
 cd ~/recipe-app/pipeline
 python3 extract_recipes.py --db ~/recipe-app/recipes.db \
-    --book-title "Author - Title" --pdf "/path/to/the.pdf" \
-    --pages-per-chunk 8
+    --book-title "Author - Title" --pdf "Author - Title"
 ```
 
-No `--resume` -- this is a fresh pass over the whole book. The newly
+No explicit `--pages-per-chunk` needed if you're just moving a book up to
+the current default (7) -- pass it explicitly (e.g. `--pages-per-chunk 5`)
+if you want to go smaller still. No `--resume` -- this is a fresh pass
+over the whole book. The newly
 extracted recipes land with `status='pending'` alongside the book's
 existing `approved` ones (nothing already live is touched or hidden), so
 both sets are visible in the review queue at once. Go through them,
@@ -387,11 +406,12 @@ python3 remove_book_recipes.py --book "Author - Title" --apply --clear-extractio
 
 cd ~/recipe-app/pipeline
 python3 extract_recipes.py --db ~/recipe-app/recipes.db \
-    --book-title "Author - Title" --pdf "/path/to/the.pdf" \
-    --pages-per-chunk 8
+    --book-title "Author - Title" --pdf "Author - Title"
 ```
 
-Everything still lands as `pending` and needs the usual review-queue pass
+Same note as above on `--pages-per-chunk` -- the current default (7) is
+used automatically unless you pass a different value. Everything still
+lands as `pending` and needs the usual review-queue pass
 before it's visible on the site -- this skips the side-by-side comparison,
 not the review step.
 

@@ -17,15 +17,19 @@ practical or just very slow.
 
 Requires Ollama running and reachable (defaults to http://localhost:11434,
 i.e. running this ON junipernine2 itself), with the model already pulled:
-    ollama pull qwen2.5:14b
+    ollama pull qwen3:14b
 
 Usage:
     python3 extract_recipes_local.py \
-        --pdf "/media/aj9/Juniper13/cookbook_ocr_compressed/Nigella Lawson - Feast.pdf" \
+        --pdf "Nigella Lawson - Feast" \
         --book-title "Nigella Lawson - Feast" \
         --db ~/recipe-app/recipes.db \
-        --model qwen2.5:14b \
         --sample 2
+
+--pdf normally takes just the book's name and resolves it inside
+COOKBOOK_OCR_COMPRESSED_DIR (see extract_recipes.py) with a .pdf extension
+added -- pass --fullpath if you need to point at a PDF that isn't in that
+folder.
 
 Known limitation: same chunk-boundary caveat as extract_recipes.py --
 recipes straddling a chunk boundary may come out incomplete or duplicated.
@@ -54,6 +58,7 @@ except ImportError:
         return iterable
 
 from extract_recipes import (
+    COOKBOOK_OCR_COMPRESSED_DIR,
     EXTRACTION_PROMPT,
     already_done,
     chunk_pages,
@@ -61,6 +66,7 @@ from extract_recipes import (
     insert_recipe,
     looks_like_index_chunk,
     pdftotext_pages,
+    resolve_pdf_path,
 )
 from recipe_qc import init_qc_table, run_checks
 
@@ -186,17 +192,21 @@ def call_ollama(host, model, chunk_text, retries=2):
 
 def main():
     ap = argparse.ArgumentParser(description="Phase 2 (local): extract recipes from one cookbook via a local Ollama model")
-    ap.add_argument("--pdf", required=True, help="path to the book's PDF (the compressed copy is fine)")
+    ap.add_argument("--pdf", required=True,
+                     help=f"the book's name (as passed to --book-title) -- resolved inside "
+                          f"{COOKBOOK_OCR_COMPRESSED_DIR} with .pdf appended, unless --fullpath is set")
+    ap.add_argument("--fullpath", action="store_true",
+                     help=f"treat --pdf as a full path instead of a book name inside {COOKBOOK_OCR_COMPRESSED_DIR}")
     ap.add_argument("--book-title", required=True, help="display name to store as source_book")
     ap.add_argument("--db", required=True, help="recipes.db to write into")
-    ap.add_argument("--pages-per-chunk", type=int, default=15)
-    ap.add_argument("--model", default="qwen2.5:14b", help="Ollama model tag (must already be pulled)")
+    ap.add_argument("--pages-per-chunk", type=int, default=7)
+    ap.add_argument("--model", default="qwen3:14b", help="Ollama model tag (must already be pulled)")
     ap.add_argument("--ollama-host", default="http://localhost:11434")
     ap.add_argument("--resume", action="store_true", help="skip chunks already recorded in extraction_log for this engine")
     ap.add_argument("--sample", type=int, default=0, help="only process the first N chunks (smoke test)")
     args = ap.parse_args()
 
-    pdf_path = Path(args.pdf).expanduser()
+    pdf_path = resolve_pdf_path(args.pdf, args.fullpath)
     if not pdf_path.exists():
         print(f"ERROR: file not found: {pdf_path}", file=sys.stderr)
         sys.exit(1)

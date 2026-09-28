@@ -10,8 +10,10 @@ How it works:
   - Runs pdftotext against the given PDF. pdftotext inserts a form-feed
     (\f) between pages by default, so page boundaries are exact -- no
     guessing where one page ends and the next begins.
-  - Groups --pages-per-chunk pages together (default 15) and sends each
-    chunk to Claude with an extraction prompt.
+  - Groups --pages-per-chunk pages together (default 7 -- locked in
+    2026-09-28 after 15 was found to silently drop recipes in denser
+    chunks, see "Reprocessing a book with different chunk settings" in
+    RUNBOOK.md) and sends each chunk to Claude with an extraction prompt.
   - Every chunk's REAL input/output token usage comes straight from the
     API's own response (response.usage), not an estimate -- so the final
     summary is a measured cost for this specific book, useful for
@@ -24,12 +26,16 @@ How it works:
 Usage:
     export ANTHROPIC_API_KEY=sk-ant-...
     python3 extract_recipes.py \
-        --pdf "/media/aj9/Juniper13/cookbook_ocr_compressed/Nigella Lawson - Feast.pdf" \
+        --pdf "Nigella Lawson - Feast" \
         --book-title "Nigella Lawson - Feast" \
         --db ~/recipe-app/recipes.db --resume
 
     # smoke-test on just the first 2 chunks before committing to the whole book
     python3 extract_recipes.py --pdf "..." --book-title "..." --db ... --sample 2
+
+--pdf normally takes just the book's name and resolves it inside
+COOKBOOK_OCR_COMPRESSED_DIR (below) with a .pdf extension added -- pass
+--fullpath if you need to point at a PDF that isn't in that folder.
 
 Known limitation: chunks don't overlap, so a recipe that straddles a chunk
 boundary (e.g. starts on the last page of chunk 3, finishes on the first
@@ -67,6 +73,11 @@ PRICING_PER_MTOK = {
     "claude-sonnet-5":         {"input": 2.00, "output": 10.00},
     "claude-haiku-4-5-20251001": {"input": 1.00, "output": 5.00},
 }
+
+# Where every book's compressed PDF actually lives -- --pdf resolves against
+# this by default (see resolve_pdf_path below), so you only need to type the
+# book's name, not the full path, for the overwhelming majority of runs.
+COOKBOOK_OCR_COMPRESSED_DIR = Path("/media/aj9/Juniper13/cookbook_ocr_compressed")
 
 EXTRACTION_PROMPT = """Extract every actual recipe from the following cookbook text into a JSON array.
 
@@ -374,18 +385,38 @@ def insert_recipe(conn, recipe, book_title, source_path, page_start, page_end, e
     return cursor.lastrowid
 
 
+def resolve_pdf_path(pdf_arg: str, fullpath: bool) -> Path:
+    """By default, --pdf takes just the book's name (the same "Author -
+    Title" string you pass to --book-title) and resolves it inside
+    COOKBOOK_OCR_COMPRESSED_DIR with a .pdf extension appended -- that's
+    where every book actually lives, so typing the full path (and getting
+    its shell-quoting exactly right) every single time was pure friction.
+    A trailing ".pdf" on the name is tolerated and stripped before
+    re-adding it, so passing the filename itself doesn't double up.
+    Pass --fullpath when you genuinely need to point at a PDF that isn't
+    in that folder -- --pdf is then used exactly as given, unchanged."""
+    if fullpath:
+        return Path(pdf_arg).expanduser()
+    name = pdf_arg[:-4] if pdf_arg.lower().endswith(".pdf") else pdf_arg
+    return COOKBOOK_OCR_COMPRESSED_DIR / f"{name}.pdf"
+
+
 def main():
     ap = argparse.ArgumentParser(description="Phase 2: extract recipes from one cookbook via Claude API")
-    ap.add_argument("--pdf", required=True, help="path to the book's PDF (the compressed copy is fine)")
+    ap.add_argument("--pdf", required=True,
+                     help=f"the book's name (as passed to --book-title) -- resolved inside "
+                          f"{COOKBOOK_OCR_COMPRESSED_DIR} with .pdf appended, unless --fullpath is set")
+    ap.add_argument("--fullpath", action="store_true",
+                     help=f"treat --pdf as a full path instead of a book name inside {COOKBOOK_OCR_COMPRESSED_DIR}")
     ap.add_argument("--book-title", required=True, help="display name to store as source_book")
     ap.add_argument("--db", required=True, help="recipes.db to write into")
-    ap.add_argument("--pages-per-chunk", type=int, default=15)
+    ap.add_argument("--pages-per-chunk", type=int, default=7)
     ap.add_argument("--model", default="claude-sonnet-5", choices=list(PRICING_PER_MTOK))
     ap.add_argument("--resume", action="store_true", help="skip chunks already recorded in extraction_log")
     ap.add_argument("--sample", type=int, default=0, help="only process the first N chunks (smoke test)")
     args = ap.parse_args()
 
-    pdf_path = Path(args.pdf).expanduser()
+    pdf_path = resolve_pdf_path(args.pdf, args.fullpath)
     if not pdf_path.exists():
         print(f"ERROR: file not found: {pdf_path}", file=sys.stderr)
         sys.exit(1)
