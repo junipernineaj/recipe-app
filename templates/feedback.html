@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Feedback - My Recipes</title>
+    <link rel="stylesheet" href="/static/style.css?v=5">
+</head>
+<body>
+    <div class="container">
+        <div class="site-header">
+<div class="site-nav">
+    <a href="/">🍳 Back to recipes</a>
+    <a href="/books">📚 View book library</a>
+    <a href="/authors">📖 Browse by author</a>
+    {% if is_admin %}
+    <a href="/review">🔍 Review queue</a>
+    <a href="/qc-issues">⚠️ QC issues</a>
+    <a href="/unit-tests">🧪 Unit tests</a>
+    <a href="/feedback/inbox">📥 Feedback inbox</a>
+    {% endif %}
+</div>
+            <h1>💬 Feedback</h1>
+            <p class="tagline">Spotted a bug, or have an idea for something the site should do? Let me know.</p>
+        </div>
+
+        {% if submitted %}
+        <p class="stats-line">Thanks -- got it! 🎉</p>
+        {% endif %}
+
+        <form method="post" action="/feedback">
+            <label>What kind of thing is this?
+                <select name="kind" class="feedback-kind-select" required>
+                    <option value="feature">Feature request / idea</option>
+                    <option value="bug">Bug report / something's broken</option>
+                </select>
+            </label>
+            <label>Tell me more
+                <textarea name="message" rows="6" required placeholder="What happened, or what would you like to see?"></textarea>
+            </label>
+            <input type="hidden" name="page_url" value="{{ referer }}">
+            <button type="submit" class="btn">Send</button>
+        </form>
+    </div>
+</body>
+</html>

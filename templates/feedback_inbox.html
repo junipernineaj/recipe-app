@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Feedback Inbox - My Recipes</title>
+    <link rel="stylesheet" href="/static/style.css?v=5">
+</head>
+<body>
+    <div class="container">
+        <div class="site-header">
+<div class="site-nav">
+    <a href="/">🍳 Back to recipes</a>
+    <a href="/books">📚 View book library</a>
+    <a href="/review">🔍 Review queue</a>
+    <a href="/qc-issues">⚠️ QC issues</a>
+    <a href="/unit-tests">🧪 Unit tests</a>
+</div>
+            <h1>📥 Feedback Inbox</h1>
+            <p class="tagline">Bug reports and feature ideas submitted through the site</p>
+            <p class="stats-line">{{ open_count }} unresolved item{{ "s" if open_count != 1 else "" }}</p>
+        </div>
+
+        <ul id="feedback-list">
+            {% for item in items %}
+            <li>
+                <div class="feedback-meta">
+                    <span class="feedback-tag feedback-kind-{{ item['kind'] }}">{{ item["kind"] }}</span>
+                    <span class="feedback-tag feedback-status-{{ item['status'] }}">{{ item["status"] }}</span>
+                    &middot; {{ item["user_email"] or "unknown" }}
+                    &middot; {{ item["created_at"][:16] }} UTC
+                    {% if item["page_url"] and (item["page_url"].startswith("http://") or item["page_url"].startswith("https://")) %}
+                    &middot; <a href="{{ item['page_url'] }}">page it was sent from</a>
+                    {% elif item["page_url"] %}
+                    &middot; {{ item["page_url"] }}
+                    {% endif %}
+                </div>
+                <p class="feedback-message">{{ item["message"] }}</p>
+                <div class="feedback-actions">
+                    {% if item["status"] != "done" %}
+                    <form method="post" action="/feedback/{{ item['id'] }}/status">
+                        <input type="hidden" name="status" value="done">
+                        <button type="submit" class="delete-btn">Mark done</button>
+                    </form>
+                    {% endif %}
+                    {% if item["status"] != "dismissed" %}
+                    <form method="post" action="/feedback/{{ item['id'] }}/status">
+                        <input type="hidden" name="status" value="dismissed">
+                        <button type="submit" class="delete-btn">Dismiss</button>
+                    </form>
+                    {% endif %}
+                    {% if item["status"] != "new" %}
+                    <form method="post" action="/feedback/{{ item['id'] }}/status">
+                        <input type="hidden" name="status" value="new">
+                        <button type="submit" class="delete-btn">Reopen</button>
+                    </form>
+                    {% endif %}
+                </div>
+            </li>
+            {% else %}
+            <li class="empty-state">Nothing here yet.</li>
+            {% endfor %}
+        </ul>
+    </div>
+</body>
+</html>
