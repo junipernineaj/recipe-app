@@ -1071,6 +1071,15 @@ async def edit_recipe(
     pairs_with_ids = [int(v) for v in form.getlist("pairs_with_ids") if v]
     update_recipe(recipe_id, title, servings, prep_time, cook_time, ingredients, instructions, notes, flagged_for_review)
     set_recipe_relations(recipe_id, needs_ids, pairs_with_ids)
+    # Re-run QC right after a save, not just on demand via the "Rerun
+    # checks" button -- a save is exactly the moment the recipe's content
+    # just changed, so the QC table showing stale results (e.g. a "no
+    # extraction warning" failure still quoting text you already fixed)
+    # until a separate click was surprising. Cheap: these are the same
+    # deterministic, no-model-call checks the button runs.
+    conn = sqlite3.connect("recipes.db")
+    _run_recipe_qc_checks(conn, recipe_id)
+    conn.close()
     return RedirectResponse(url=f"/recipes/{recipe_id}", status_code=303)
 
 
