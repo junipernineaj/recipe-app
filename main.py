@@ -519,7 +519,56 @@ def _sort_pending_recipes(recipes, sort):
     return recipes
 
 
-def get_pending_recipes(sort: str = "book_asc"):
+def _qc_score_str(recipe: dict) -> str:
+    """The exact "passed/total" string a recipe's QC badge displays, or
+    'none' for a recipe with no QC checks recorded yet -- used both to
+    build the review queue's QC-score filter options and to match a
+    recipe against the selected one, so a filter option always means
+    exactly what it says on the badge."""
+    total = recipe.get("qc_total") or 0
+    if not total:
+        return "none"
+    return f"{recipe['qc_passed']}/{total}"
+
+
+def _extracted_date_str(recipe: dict) -> str:
+    """The DAY (not time) a recipe was extracted, or 'none' if it has no
+    extracted_at at all (e.g. added by hand rather than through the
+    pipeline) -- same sentinel convention as _qc_score_str."""
+    extracted_at = recipe.get("extracted_at")
+    return extracted_at[:10] if extracted_at else "none"
+
+
+def _pending_recipe_filter_options(recipes: list[dict]) -> dict:
+    """The book/QC-score/date choices to offer on the review queue's
+    filter row, computed from the FULL pending set before any filter is
+    applied -- so the dropdowns always list every available option,
+    rather than narrowing themselves as filters get chosen. QC scores are
+    sorted highest-total-first then highest-passed-first (7/7 before
+    6/7 before 6/6), dates newest first; 'no QC data yet' / 'no
+    extraction date' are appended last in each, only when at least one
+    recipe actually needs them."""
+    books = sorted({r["source_book"] for r in recipes if r["source_book"]}, key=str.lower)
+
+    qc_scores = sorted(
+        {(r["qc_passed"], r["qc_total"]) for r in recipes if r.get("qc_total")},
+        key=lambda t: (-t[1], -t[0]),
+    )
+    has_no_qc = any(not r.get("qc_total") for r in recipes)
+
+    dates = sorted({d for r in recipes if (d := _extracted_date_str(r)) != "none"}, reverse=True)
+    has_no_date = any(_extracted_date_str(r) == "none" for r in recipes)
+
+    return {
+        "books": books,
+        "qc_scores": [f"{passed}/{total}" for passed, total in qc_scores],
+        "has_no_qc": has_no_qc,
+        "dates": dates,
+        "has_no_date": has_no_date,
+    }
+
+
+def get_pending_recipes(sort: str = "book_asc", book_filter: str = "", qc_filter: str = "", date_filter: str = ""):
     conn = sqlite3.connect("recipes.db")
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
@@ -532,7 +581,17 @@ def get_pending_recipes(sort: str = "book_asc"):
     recipes = [dict(row) for row in cursor.fetchall()]
     recipes = _attach_qc_info(conn, recipes)
     conn.close()
-    return _sort_pending_recipes(recipes, sort)
+
+    filter_options = _pending_recipe_filter_options(recipes)
+
+    if book_filter:
+        recipes = [r for r in recipes if r["source_book"] == book_filter]
+    if qc_filter:
+        recipes = [r for r in recipes if _qc_score_str(r) == qc_filter]
+    if date_filter:
+        recipes = [r for r in recipes if _extracted_date_str(r) == date_filter]
+
+    return _sort_pending_recipes(recipes, sort), filter_options
 
 
 def get_qc_failed_recipes():
@@ -876,10 +935,19 @@ def submit_feedback(request: Request, kind: str = Form(...), message: str = Form
 
 
 @app.get("/review")
-def review_page(request: Request, sort: str = "book_asc", _: None = Depends(require_admin)):
-    recipes = get_pending_recipes(sort=sort)
+def review_page(
+    request: Request, sort: str = "book_asc", book: str = "", qc: str = "", date: str = "",
+    _: None = Depends(require_admin),
+):
+    recipes, filter_options = get_pending_recipes(sort=sort, book_filter=book, qc_filter=qc, date_filter=date)
     return templates.TemplateResponse(
-        request=request, name="review.html", context={"recipes": recipes, "is_admin": True, "sort": sort}
+        request=request, name="review.html",
+        context={
+            "recipes": recipes, "is_admin": True, "sort": sort,
+            "book_filter": book, "qc_filter": qc, "date_filter": date,
+            "filter_options": filter_options,
+            "total_pending_count": get_pending_recipe_count(),
+        }
     )
 
 @app.get("/qc-issues")

@@ -1,11 +1,42 @@
 {% macro sort_link(column, label) %}
 {% set next_sort = column ~ '_desc' if sort == column ~ '_asc' else column ~ '_asc' %}
-<a href="/review?sort={{ next_sort }}">{{ label }}{% if sort == column ~ '_asc' %} ▲{% elif sort == column ~ '_desc' %} ▼{% endif %}</a>
+<a href="/review?sort={{ next_sort }}&book={{ book_filter | urlencode }}&qc={{ qc_filter | urlencode }}&date={{ date_filter | urlencode }}">{{ label }}{% if sort == column ~ '_asc' %} ▲{% elif sort == column ~ '_desc' %} ▼{% endif %}</a>
 {% endmacro %}
 
 <div class="review-sort-row">
     Sort by: {{ sort_link('book', 'Book') }} &middot; {{ sort_link('qc', 'QC score') }} &middot; {{ sort_link('date', 'Extracted') }}
 </div>
+
+<form method="get" action="/review" class="actions-row review-filter-row">
+    <input type="hidden" name="sort" value="{{ sort }}">
+    <select name="book" class="book-filter" onchange="this.form.submit()">
+        <option value="">All books</option>
+        {% for b in filter_options["books"] %}
+        <option value="{{ b }}" {% if b == book_filter %}selected{% endif %}>{{ b }}</option>
+        {% endfor %}
+    </select>
+    <select name="qc" class="book-filter" onchange="this.form.submit()">
+        <option value="">Any QC score</option>
+        {% for score in filter_options["qc_scores"] %}
+        <option value="{{ score }}" {% if score == qc_filter %}selected{% endif %}>QC: {{ score }}</option>
+        {% endfor %}
+        {% if filter_options["has_no_qc"] %}
+        <option value="none" {% if qc_filter == "none" %}selected{% endif %}>No QC data yet</option>
+        {% endif %}
+    </select>
+    <select name="date" class="book-filter" onchange="this.form.submit()">
+        <option value="">Any extraction date</option>
+        {% for d in filter_options["dates"] %}
+        <option value="{{ d }}" {% if d == date_filter %}selected{% endif %}>{{ d }}</option>
+        {% endfor %}
+        {% if filter_options["has_no_date"] %}
+        <option value="none" {% if date_filter == "none" %}selected{% endif %}>No extraction date</option>
+        {% endif %}
+    </select>
+    {% if book_filter or qc_filter or date_filter %}
+    <a href="/review?sort={{ sort }}" class="delete-btn">Clear filters</a>
+    {% endif %}
+</form>
 
 <ul id="review-list">
     {% for recipe in recipes %}

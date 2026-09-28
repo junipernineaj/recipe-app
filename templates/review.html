@@ -17,7 +17,11 @@
 </div>
             <h1>🔍 Review Queue</h1>
             <p class="tagline">Pending extractions -- approve to make them visible on the main site</p>
+            {% if book_filter or qc_filter or date_filter %}
+            <p class="stats-line">{{ recipes|length }} of {{ total_pending_count }} recipe{{ "s" if total_pending_count != 1 else "" }} match your filters -- not yet visible to readers</p>
+            {% else %}
             <p class="stats-line">{{ recipes|length }} recipe{{ "s" if recipes|length != 1 else "" }} waiting for review -- not yet visible to readers</p>
+            {% endif %}
         </div>
 
         {% include "review_list.html" %}
