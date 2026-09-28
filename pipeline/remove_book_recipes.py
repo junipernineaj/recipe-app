@@ -51,6 +51,16 @@ Usage:
     #    clear it) untouched.
     python3 remove_book_recipes.py --book "Nigella Lawson - Feast" \\
         --status pending --apply
+
+    # 4. Trim a bad partial run: if a re-extraction went wrong partway
+    #    through (e.g. wrong PDF page range, a crashed run) and you can
+    #    see in the review queue exactly which id the good recipes start
+    #    at, remove everything below that id for this book and leave the
+    #    rest alone. Can't be combined with --clear-extraction-log --
+    #    extraction_log has no recipe id in it, so there'd be no way to
+    #    clear only the log rows for the deleted range.
+    python3 remove_book_recipes.py --book "Nigella Lawson - Feast" \\
+        --before-id 2145 --apply
 """
 
 import argparse
@@ -58,15 +68,19 @@ import os
 import sqlite3
 
 
-def find_matching_recipes(cursor, book, status=None):
+def find_matching_recipes(cursor, book, status=None, before_id=None):
     """Every `recipes` row for this book (exact source_book match, same
     convention as recipe_qc.py's --book), optionally narrowed to one
-    status. Returns list of dicts with id/title/status/source_path."""
+    status and/or to ids below before_id. Returns list of dicts with
+    id/title/status/source_path."""
     query = "SELECT id, title, status, source_path FROM recipes WHERE source_book = ?"
     params = [book]
     if status:
         query += " AND status = ?"
         params.append(status)
+    if before_id is not None:
+        query += " AND id < ?"
+        params.append(before_id)
     cursor.execute(query, params)
     return [dict(row) for row in cursor.fetchall()]
 
@@ -113,6 +127,13 @@ def main():
         help="Only match recipes with this status (default: every status)",
     )
     parser.add_argument(
+        "--before-id", type=int, default=None, metavar="ID",
+        help="Only match recipes with id < ID -- useful for trimming a bad "
+             "partial extraction run once you know the first id that looks "
+             "right (default: no id filter). Can't be combined with "
+             "--clear-extraction-log.",
+    )
+    parser.add_argument(
         "--apply", action="store_true",
         help="Actually delete the matching rows (default: dry run, report only)",
     )
@@ -127,14 +148,26 @@ def main():
     if args.clear_extraction_log and not args.apply:
         parser.error("--clear-extraction-log requires --apply")
 
+    if args.before_id is not None and args.clear_extraction_log:
+        parser.error(
+            "--before-id can't be combined with --clear-extraction-log: "
+            "extraction_log rows aren't linked to a recipe id (only to "
+            "source_path), so clearing the log here would wipe this "
+            "book's WHOLE extraction history -- including the chunks "
+            "behind the recipes you're keeping -- not just the range "
+            "you're deleting. Re-run without --clear-extraction-log."
+        )
+
     conn = sqlite3.connect(args.db)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
 
-    matches = find_matching_recipes(cursor, args.book, status=args.status)
+    matches = find_matching_recipes(cursor, args.book, status=args.status, before_id=args.before_id)
 
     if not matches:
         status_bit = f" with status={args.status}" if args.status else ""
+        if args.before_id is not None:
+            status_bit += f" with id < {args.before_id}"
         print(f"No recipes found for source_book={args.book!r}{status_bit}")
         conn.close()
         return
@@ -149,6 +182,8 @@ def main():
     total_log_rows = sum(log_counts.values())
 
     status_bit = f" (status={args.status})" if args.status else " (any status)"
+    if args.before_id is not None:
+        status_bit += f", id < {args.before_id}"
     print(f"{len(matches)} recipe(s) match source_book={args.book!r}{status_bit}:\n")
     for m in matches:
         print(f"  [{m['status']:>8}] #{m['id']:<5} {m['title']}")
