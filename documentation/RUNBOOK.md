@@ -267,6 +267,33 @@ book filter, the review queue, `/qc-issues`).
   this specific drift shouldn't happen again, but it doesn't retroactively
   fix data from before the check existed.
 
+- **`rename_book_source_book.py`** — a different shape of problem from the
+  one above: a book that's *internally* consistent (every recipe agrees)
+  but wrong — usually stored `"Title - Author"` instead of the documented
+  `"Author - Title"` convention. There's no reliable way to tell those two
+  apart from the text alone (either half can contain a hyphen, and only a
+  human who knows the book can say which order is right), so this is a
+  manual, one-book-at-a-time rename rather than an auto-detector. Safe by
+  default — reports what it would rename until `--apply`, and says up
+  front if the new name already has recipes of its own (in which case the
+  rename becomes a merge, not just a relabel).
+
+  ```
+  python3 pipeline/rename_book_source_book.py \
+      --old-name "Japaneasy - Tim Anderson" --new-name "Tim Anderson - Japaneasy"
+  python3 pipeline/rename_book_source_book.py \
+      --old-name "Japaneasy - Tim Anderson" --new-name "Tim Anderson - Japaneasy" --apply
+  ```
+
+  **The incident this was built for (2026-09-28):** spotted right after
+  fixing the Christmas Chronicles split above — "Japaneasy" by Tim
+  Anderson was stored throughout as `"Japaneasy - Tim Anderson"`, backwards
+  from the convention. `find_inconsistent_book_titles.py` didn't catch
+  this one because there was no disagreement to find — every one of the
+  book's recipes agreed on the same (wrong) name. Worth a quick look at
+  the home page's book filter after extracting a new book, since nothing
+  currently checks this automatically.
+
 ## Extracting recipes from a book (Phase 2)
 
 Two interchangeable scripts, both writing into the same `recipes.db` with
