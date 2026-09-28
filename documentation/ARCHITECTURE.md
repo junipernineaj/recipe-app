@@ -10,6 +10,12 @@ databases" below):
 2. **The web app** (`main.py`, `templates/`) — a FastAPI + HTMX site that
    browses the resulting library and (eventually) individual recipes.
 
+**For the actual commands** — how to run any of the above, start the web
+app, or use one of the ad hoc maintenance scripts, with their flags and
+when to reach for them — see `documentation/RUNBOOK.md` instead. This doc
+stays focused on what things are and how they fit together; that one is
+the "what do I actually type" reference.
+
 If you only remember one thing from this page, remember the three-folder
 rule in the next section — it's the thing that's caused the most confusion
 so far.
@@ -198,71 +204,21 @@ skipped).
 
 ### Stage 1 — `cookbook_inventory.py` (classify what's in the holding pen)
 
-```
-python3 cookbook_inventory.py --source /media/aj9/Juniper13/Books/Cookbooks \
-    --db ~/cookbook-project/inventory.sqlite --csv ~/cookbook-project/inventory.csv --resume
-```
-
 Walks the holding pen, tries to extract text from every file (PDF, EPUB,
 DOCX, RTF, TXT natively; mobi/azw/djvu/etc. via Calibre if installed), and
 classifies each one. This is the step that decides whether a file needs
-OCR at all.
-
-Useful flags:
-- `--resume` — skip anything already recorded in `inventory` (a prior
-  `error` status still gets retried; only a real success is skipped).
-- `--prune` — before scanning, remove `inventory` rows for files that have
-  disappeared from `--source` *and* were never actually processed (no OCR
-  history, no resolved status like `readable_native`). Anything with real
-  processing history is protected regardless of where its file currently
-  lives, so this never touches a done book. Requires `--archive-dir`
-  (repeatable) to confirm a same-named copy actually exists somewhere
-  before deleting anything; without it, missing files are only reported,
-  never deleted.
-- `--prune-only` — run just the prune step and print the summary, skip the
-  scan entirely. **Run this (not `--prune`) first after a big clear-out**
-  and check the Protected/Removed/Warning counts before trusting a real
-  `--prune` run.
-
-Typical prune, after processed books have been moved out of the holding pen:
-
-
-```
-python3 cookbook_inventory.py --source /media/aj9/Juniper13/Books/Cookbooks \
-    --db ~/cookbook-project/inventory.sqlite --prune-only \
-    --archive-dir /media/aj9/Juniper13/cookbook_ocr_output \
-    --archive-dir /media/aj9/Juniper13/cookbook_ocr_compressed
-```
+OCR at all. `--prune`/`--prune-only` also live here, for cleaning up
+`inventory` rows for files that have disappeared from the holding pen
+without ever being processed (see the ghost-row incident under "The three
+storage locations" above). See `RUNBOOK.md` → "Stage 1" for the actual
+commands and flags.
 
 ### Stage 2 — `ocr_pass.py` (bake in searchable text)
-
-```
-python3 ocr_pass.py --db ~/cookbook-project/inventory.sqlite \
-    --source /media/aj9/Juniper13/Books/Cookbooks \
-    --output-dir /media/aj9/Juniper13/cookbook_ocr_output --resume
-```
 
 Runs `ocrmypdf` over everything Stage 1 marked `needs_ocr`, then
 independently re-extracts text from the result to verify OCR actually
 worked (rather than trusting `ocrmypdf`'s exit code). Originals are never
 touched — output always goes to `cookbook_ocr_output`.
-
-Useful flags beyond the basics:
-- `--file-list <path>` — process an explicit list of file paths (one per
-  line) instead of querying the DB. Use this for a targeted fix without
-  touching the rest of the library.
-- `--force-ocr` — discard any existing text layer and redo OCR from
-  scratch. Needed when re-processing a file whose first OCR pass was bad
-  (e.g. wrong orientation) — the default `--skip-text` mode leaves pages
-  that already have *any* text layer alone, which would preserve the bad
-  result.
-- `--rotate-pages-threshold <N>` — lowers the confidence bar for
-  `--rotate-pages`'s automatic per-page orientation correction (default
-  ocrmypdf threshold is 14; we've used `2` successfully for batches of
-  inconsistently-oriented scans, e.g. mixed-orientation recipe cards).
-- `--timeout <seconds>` — default 2400 (40 min). Large/dense books
-  (400+ pages, or a combined multi-volume PDF) can need much longer —
-  we've used up to 7200s (2hr) for oversized single-file volumes.
 
 **Known gap:** a small number of files fail with
 `DecompressionBombError` (an embedded image with an absurd pixel count —
@@ -270,13 +226,9 @@ seen on a 576-page book with one wildly over-scanned image). `ocrmypdf`
 has a `--max-image-mpixels` flag for exactly this, but it isn't wired
 into `ocr_pass.py`'s CLI yet — that's a pending code change, not yet done.
 
-### Stage 3 — `compress_pass.py` (shrink while preserving searchable text)
+See `RUNBOOK.md` → "Stage 2" for the actual command and flags.
 
-```
-python3 compress_pass.py --db ~/cookbook-project/inventory.sqlite \
-    --source /media/aj9/Juniper13/cookbook_ocr_output \
-    --output-dir /media/aj9/Juniper13/cookbook_ocr_compressed --resume
-```
+### Stage 3 — `compress_pass.py` (shrink while preserving searchable text)
 
 Re-compresses images via Ghostscript (text objects pass through
 untouched, so the OCR layer survives), then verifies success by
@@ -285,106 +237,19 @@ extracting text from before/after and comparing similarity
 originally-too-strict `0.999` after observing that genuine OCR/recompression
 noise routinely lands in the 0.997–0.999 range; anything meaningfully
 below that, e.g. ~0.98, is worth an actual manual look rather than assumed
-noise).
+noise). See `RUNBOOK.md` → "Stage 3" for the actual command and flags.
 
-Useful flags:
-- `--file` / `--file-list` — target specific files directly, bypassing
-  the normal `--source` directory scan. Essential for natively-readable
-  PDFs that never went through OCR (and so never land under
-  `cookbook_ocr_output`'s scan), or for re-verifying one specific fix.
-- `--color-dpi` / `--gray-dpi` / `--mono-dpi` — compression targets
-  (defaults 200/200/300).
+### `weekly_refresh.sh` and the ad hoc maintenance scripts
 
-### `weekly_refresh.sh` — chaining all three
-
-`pipeline/weekly_refresh.sh` runs all three stages back to back with
-`--resume`, logs to `weekly_refresh.log`, and prints a pass/fail summary.
-**It currently has `CHANGE_ME` placeholders for `SOURCE_DIR`,
-`OCR_OUTPUT_DIR`, and `COMPRESSED_OUTPUT_DIR`** and needs those filled in
-with the real paths above before it's actually usable — it also predates
-the pipeline scripts moving into this repo, so double check its `cd`
-target and venv path match `~/recipe-app/pipeline` and
-`~/cookbook-project/venv` before relying on it.
-
-### Finding and removing exact-duplicate books
-
-Two small, standalone utilities in `pipeline/` for when the same book
-ends up registered twice in `inventory` — not part of the regular
-pipeline flow above, just there for whenever it's needed again.
-
-- **`find_duplicate_books.py`** — resolves each book to the same file
-  `/books/view` would actually serve (compressed, if `verified_ok` →
-  OCR'd → the raw original) and hashes it, then reports every group of
-  books whose resolved files are byte-identical. Read-only — it never
-  changes anything, it just prints (or `--csv`-exports) the groups it
-  finds, tier by tier (`compressed`/`ocr`/`original`), for you to decide
-  what to do with. Deliberately exact-match only (zero false positives,
-  at the cost of missing near-duplicates like a book re-scanned from a
-  different physical copy).
-
-  ```
-  python3 pipeline/find_duplicate_books.py
-  python3 pipeline/find_duplicate_books.py --csv duplicate_books_report.csv
-  python3 pipeline/find_duplicate_books.py --include-excluded
-  ```
-
-- **`remove_books_by_path_prefix.py`** — removes every `inventory` row
-  under a given folder prefix, along with its `ocr_results` and
-  `compress_results` rows (walking the same original → OCR output →
-  compressed output chain, so it doesn't leave the kind of ghost rows
-  `prune_ghosts.py` was written to clean up). Written for the 2026-09
-  incident below, but generic — reusable for any similar accidental
-  re-scan of a subfolder. Safe by default: with no flags it only
-  *reports* what it would delete; nothing touches the database until
-  `--apply`, and files on disk are only ever removed with
-  `--apply --delete-files` together, and even then only the OCR'd/
-  compressed copies, never the original. Doesn't touch `recipes.db` —
-  see "The two databases" above for why that's fine.
-
-  ```
-  python3 pipeline/remove_books_by_path_prefix.py "/media/aj9/Juniper13/Books/Cookbooks/Keeping/"
-  python3 pipeline/remove_books_by_path_prefix.py "/media/aj9/Juniper13/Books/Cookbooks/Keeping/" --apply
-  python3 pipeline/remove_books_by_path_prefix.py "/media/aj9/Juniper13/Books/Cookbooks/Keeping/" --apply --delete-files
-  ```
-
-  **The incident these were built for (2026-09-27):** a `Keeping`
-  subfolder accidentally created directly under the `Cookbooks` source
-  directory got picked up by `cookbook_inventory.py` as a second,
-  separate set of books, even though every file in it was already
-  registered under the folder above it — so each one got OCR'd and
-  compressed all over again under a new `inventory.path`, showing up on
-  `/books` as an exact duplicate of a book already in the library. The
-  `Keeping` folder itself was gone by the time this was diagnosed;
-  `find_duplicate_books.py` is what surfaced the pattern (a cluster of
-  hash-identical books), and `remove_books_by_path_prefix.py` cleaned up
-  the leftover rows once the folder's former path was known.
-
-## Diagnosing a stuck/broken file
-
-When something in this pipeline fails, this is roughly the order that's
-worked:
-
-1. **Get the real error**, not just the status. `ocr_results` and
-   `compress_results` both store an `error_message` column — query it
-   directly rather than guessing from the summary counts.
-2. **Check the original with `qpdf --check`** before assuming the OCR
-   output is broken — several "corrupt file" scares turned out to be a
-   perfectly healthy original with the *OCR output* corrupted (usually
-   from a timeout cutting `ocrmypdf` off mid-write). `qpdf --check` on the
-   OCR'd copy vs. the original tells you which side actually has the
-   problem.
-3. **Isolate before re-running the whole book.** For a crash on a specific
-   page (say page 268 of a 600-page book), extract just that page range
-   with `qpdf --pages <file> <file> N-M — test.pdf` and run `ocrmypdf`
-   directly against the small slice with `--verbose 1`, piped to a log
-   file. This turns a 10-40 minute wait-and-guess into a few seconds, and
-   gives you the full untruncated error (our scripts only store the last
-   1500 characters of `ocrmypdf`'s output in the DB, which can cut off the
-   actual traceback).
-4. A crash that reproduces identically on an isolated slice but *not* on
-   a supposedly-different "clean" replacement copy is a sign the
-   replacement isn't actually different content — worth an `md5sum`
-   comparison before spending more time on it.
+`pipeline/weekly_refresh.sh` chains all three stages above back to back.
+There are also two small, standalone utilities in `pipeline/` for finding
+and removing exact-duplicate books when the same file ends up registered
+twice in `inventory` — not part of the regular pipeline flow, just there
+for whenever it's needed again (most recently, an accidentally-created
+`Keeping` subfolder under `Cookbooks` that got scanned as a second copy of
+the whole library — see `RUNBOOK.md` for that story). All three are
+commands you run by hand rather than architecture as such, so their
+usage, flags, and safety notes live in `RUNBOOK.md`, not here.
 
 ## The "not a cookbook" exclusion mechanism
 
@@ -459,10 +324,9 @@ infers or extracts a value.
   `recipes.junipernine.com`, gated by Cloudflare Access. See
   `documentation/recipe-app-cloudflare-setup.pdf` for the original setup
   steps.
-- Run with (see "Admin access control" below for `ADMIN_EMAILS`):
-  `export ADMIN_EMAILS="you@example.com" && cd ~/recipe-app && source
-  venv/bin/activate && uvicorn main:app --reload --host 0.0.0.0 --port
-  8000`
+- See `RUNBOOK.md` → "Running the web app" for the actual startup command
+  and the `ADMIN_EMAILS` requirement (see "Admin access control" below for
+  why that variable matters).
 
 ## Admin access control
 
@@ -482,10 +346,11 @@ How it works:
   admin is ever added) — not hardcoded, since this repo is public.
   `require_admin(request)` is the same check wrapped as a FastAPI
   `Depends()` that 403s non-admins outright.
-- **`ADMIN_EMAILS` must be exported before starting the app** (see "Run
-  with" above) or nobody is admin, including you — that's a deliberate
-  fail-closed default, not a bug. If Edit/Approve/"Not a cookbook" go
-  missing or start 403ing after a restart, check this first.
+- **`ADMIN_EMAILS` must be exported before starting the app** (see
+  `RUNBOOK.md` → "Running the web app") or nobody is admin, including you
+  — that's a deliberate fail-closed default, not a bug. If Edit/Approve/
+  "Not a cookbook" go missing or start 403ing after a restart, check this
+  first.
 - **Known, accepted gap:** uvicorn binds to `0.0.0.0`, not `127.0.0.1`,
   so the app is reachable directly over the home LAN (e.g. from a Mac at
   `http://<junipernine2-LAN-IP>:8000`), not just through the Cloudflare
@@ -549,30 +414,6 @@ How it works:
   access control" above is only a real possibility from the home LAN
   directly, not from the public URL.
 
-## Running recipe QC checks
-
-`pipeline/recipe_qc.py` is what populates `recipe_qc_results` (see "The
-two databases" above for the seven checks themselves). `extract_recipes.py`
-and `extract_recipes_local.py` already call it automatically on every
-newly-extracted recipe, so most of the time nothing needs to be run by
-hand — this script is for backfilling recipes that predate a check, or
-for re-running after a check's logic changes. Needs no venv at all (just
-`argparse`/`re`/`sqlite3`, no third-party dependencies), so plain
-`python3` works from anywhere as long as `--db` points at the real file:
-
-```
-# Every recipe in the database
-python3 pipeline/recipe_qc.py --db ~/recipe-app/recipes.db
-
-# Just one book — --book matches source_book EXACTLY (case and
-# punctuation included); if you're not sure of the exact string:
-#   sqlite3 ~/recipe-app/recipes.db "SELECT DISTINCT source_book FROM recipes;"
-python3 pipeline/recipe_qc.py --db ~/recipe-app/recipes.db --book "Nigella Lawson - Feast"
-
-# Just one recipe, e.g. right after a manual edit
-python3 pipeline/recipe_qc.py --db ~/recipe-app/recipes.db --recipe-id 42
-```
-
 ## Continuous integration
 
 As of 2026-09-27, `.github/workflows/site-checks.yml` runs
@@ -600,6 +441,9 @@ app currently selects — if a future feature queries a column that isn't
 set up in `ci_fixture_db.py`, CI will fail with a clear "no such column"
 error rather than silently passing; when that happens, add the column
 there too.
+
+See `RUNBOOK.md` → "Running the site checks locally" to run this same
+check yourself, in a scratch checkout, before pushing.
 
 ## Phase 2 (not started): recipe extraction
 
