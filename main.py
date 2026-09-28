@@ -3,7 +3,7 @@ import re
 import sqlite3
 from fastapi import FastAPI, Request, Form, Response, HTTPException, Depends
 
-from pipeline.recipe_qc import init_qc_table as _init_recipe_qc_table, CHECKS as _QC_CHECKS
+from pipeline.recipe_qc import init_qc_table as _init_recipe_qc_table, CHECKS as _QC_CHECKS, run_checks as _run_recipe_qc_checks
 from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
@@ -748,13 +748,28 @@ def get_recipe_extraction_counts(show_hidden: bool = False):
     conn.close()
     return {"done": rows.get(1, 0), "not_done": rows.get(0, 0)}
 
+def get_pending_recipe_count():
+    """Just the count, for the public-facing teaser on the home page --
+    no need to pull every pending recipe's title/QC info (like
+    get_pending_recipes() does for the review queue itself) just to show
+    a number to a non-admin visitor."""
+    conn = sqlite3.connect("recipes.db")
+    count = conn.execute("SELECT COUNT(*) FROM recipes WHERE status != 'approved'").fetchone()[0]
+    conn.close()
+    return count
+
+
 @app.get("/")
 def read_root(request: Request, book: str = ""):
     recipes = get_recipes(book_filter=book)
     books = get_distinct_source_books()
     return templates.TemplateResponse(
         request=request, name="home.html",
-        context={"recipes": recipes, "books": books, "book": book, "is_admin": is_admin(request)}
+        context={
+            "recipes": recipes, "books": books, "book": book,
+            "is_admin": is_admin(request),
+            "pending_count": get_pending_recipe_count(),
+        }
     )
 
 
@@ -1081,6 +1096,19 @@ def ack_qc_check(request: Request, recipe_id: int, check_name: str, acknowledged
         request=request, name="qc_ack_checkbox.html",
         context={"recipe": {"id": recipe_id}, "c": {"check_name": check_name, "acknowledged": value}}
     )
+
+
+@app.post("/recipes/{recipe_id}/qc/rerun")
+def rerun_recipe_qc(recipe_id: int, _: None = Depends(require_admin)):
+    """The "Rerun checks" button on the recipe page -- the same thing
+    `python3 recipe_qc.py --recipe-id <id>` does from the command line,
+    exposed here so a manual edit can be re-checked immediately without
+    dropping to a shell. run_checks() upserts, so this is safe to click
+    as many times as you like."""
+    conn = sqlite3.connect("recipes.db")
+    _run_recipe_qc_checks(conn, recipe_id)
+    conn.close()
+    return RedirectResponse(url=f"/recipes/{recipe_id}", status_code=303)
 
 
 @app.post("/recipes/{recipe_id}/approve")
