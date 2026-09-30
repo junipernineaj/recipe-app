@@ -1,6 +1,11 @@
 import os
 import re
 import sqlite3
+import pymupdf as fitz  # PDF page extraction for generate_source_page_pdf() below --
+                         # same library (and the same import alias) pipeline/ocr_pass.py
+                         # already relies on to verify OCR text against this exact corpus
+                         # of scanned cookbook PDFs, see ARCHITECTURE.md, "Per-recipe
+                         # extracted page PDFs".
 from fastapi import FastAPI, Request, Form, Response, HTTPException, Depends
 
 from pipeline.recipe_qc import init_qc_table as _init_recipe_qc_table, CHECKS as _QC_CHECKS, run_checks as _run_recipe_qc_checks
@@ -749,6 +754,79 @@ def clone_recipe(recipe_id: int) -> int:
     return new_id
 
 
+DERIVED_PAGES_DIR = os.environ.get("DERIVED_PAGES_DIR", "derived_pages")
+# Same env-var-with-a-safe-default pattern as ADMIN_EMAILS above.
+# Defaults to a plain relative path so CI (.github/workflows/site-checks.yml,
+# which runs in GitHub's own cloud runner -- see ARCHITECTURE.md,
+# "Continuous integration") always has somewhere writable, regardless of
+# what junipernine2's real storage layout looks like. Set for real on
+# junipernine2 to wherever there's actually room -- e.g.
+# /media/aj9/Juniper13/cookbook_derived_pages, right alongside the
+# already-OCR'd/compressed books -- exported the same way ADMIN_EMAILS
+# already has to be, before starting the app (see RUNBOOK.md, "Running
+# the web app").
+
+
+def _source_pdf_path(recipe_id: int) -> str:
+    return os.path.join(DERIVED_PAGES_DIR, f"{recipe_id}.pdf")
+
+
+def generate_source_page_pdf(recipe_id: int) -> str:
+    """Extracts just the page(s) a recipe's source_page/source_page_end
+    point to out of the original book PDF (recipe["source_path"]) into
+    their own small file at derived_pages/{id}.pdf, and returns that
+    path. /recipes/{id}/source_page_pdf then serves this file to every
+    visitor -- fast, since it's a couple of pages rather than a whole
+    scanned cookbook -- while /recipes/{id}/source (the full original)
+    stays admin-only. See ARCHITECTURE.md, "Per-recipe extracted page
+    PDFs" for the fuller design rationale.
+
+    Always overwrites whatever was there before, so it's safe -- and
+    intended -- to call again after source_page/source_page_end change.
+    edit_recipe() does exactly that automatically, but only for a
+    recipe that already has a derived PDF (see its own comment) -- a
+    recipe with none yet needs the "Generate page PDF" button pressed
+    once first.
+
+    Raises ValueError -- never silently no-ops -- for every case that
+    would otherwise produce a wrong or empty file: no source_path, the
+    source file missing from disk (e.g. the drive isn't mounted), no
+    source_page set, or a page range outside the actual PDF's page
+    count (source_page is hand-typed on the edit form, so a typo here
+    is exactly the kind of mistake this should catch immediately rather
+    than silently writing an empty or wrong PDF)."""
+    recipe = get_recipe_by_id(recipe_id)
+    if recipe is None:
+        raise ValueError(f"No recipe with id {recipe_id}")
+    source_path = recipe["source_path"]
+    if not source_path or not os.path.exists(source_path):
+        raise ValueError("Source file not found on disk (is the drive mounted?)")
+    source_page = recipe["source_page"]
+    if not source_page:
+        raise ValueError("This recipe has no source page set -- add one on the edit page first")
+    source_page_end = recipe["source_page_end"] or source_page
+
+    doc = fitz.open(source_path)
+    try:
+        start_index, end_index = source_page - 1, source_page_end - 1
+        if start_index < 0 or end_index < start_index or end_index >= doc.page_count:
+            raise ValueError(
+                f"Page range {source_page}-{source_page_end} is out of bounds for "
+                f"a {doc.page_count}-page source file"
+            )
+        os.makedirs(DERIVED_PAGES_DIR, exist_ok=True)
+        pdf_path = _source_pdf_path(recipe_id)
+        out = fitz.open()
+        try:
+            out.insert_pdf(doc, from_page=start_index, to_page=end_index)
+            out.save(pdf_path)
+        finally:
+            out.close()
+    finally:
+        doc.close()
+    return pdf_path
+
+
 def get_reviews_for_recipe(recipe_id: int):
     conn = sqlite3.connect("recipes.db")
     conn.row_factory = sqlite3.Row
@@ -1261,6 +1339,7 @@ def recipe_detail(request: Request, recipe_id: int):
     avg_rating = round(sum(rated) / len(rated), 1) if rated else None
     qc_results = get_qc_results_for_recipe(recipe_id) if admin else []
     relations = get_recipe_relations(recipe_id)
+    has_source_pdf = os.path.exists(_source_pdf_path(recipe_id))
 
     return templates.TemplateResponse(
         request=request,
@@ -1269,6 +1348,7 @@ def recipe_detail(request: Request, recipe_id: int):
             "recipe": recipe, "ingredients": ingredients, "instructions": instructions, "notes": notes, "is_admin": admin,
             "user_email": user_email, "reviews": reviews, "my_review": my_review,
             "made_it_count": made_it_count, "avg_rating": avg_rating, "qc_results": qc_results, "relations": relations,
+            "has_source_pdf": has_source_pdf,
         }
     )
 
@@ -1305,16 +1385,38 @@ def submit_review(
 
 
 @app.get("/recipes/{recipe_id}/source")
-def recipe_source(request: Request, recipe_id: int):
+def recipe_source(recipe_id: int, _: None = Depends(require_admin)):
+    """The FULL original book PDF, #page=N-jumpable -- admin-only (changed
+    2026-09-30; previously open to any visitor of an approved recipe, same
+    as every other page on the site). A regular visitor now gets
+    /recipes/{id}/source_page_pdf instead, which serves just the couple of
+    pages this recipe is actually on rather than the whole scanned book.
+    See ARCHITECTURE.md, "Per-recipe extracted page PDFs"."""
+    recipe = get_recipe_by_id(recipe_id)
+    if recipe is None:
+        return Response(status_code=404, content="Recipe not found")
+    source_path = recipe["source_path"]
+    if not source_path or not os.path.exists(source_path):
+        return Response(status_code=404, content="Source file not found on disk (is the drive mounted?)")
+    return FileResponse(source_path)
+
+
+@app.get("/recipes/{recipe_id}/source_page_pdf")
+def recipe_source_page_pdf(request: Request, recipe_id: int):
+    """The small, per-recipe derived PDF -- exactly as public as the
+    recipe itself (same approved-or-admin gate as the recipe's own page
+    and every other public route), unlike the full original book above.
+    404s until an admin has generated one (see generate_source_page_pdf()
+    and the "Generate page PDF" button on the recipe's own page)."""
     recipe = get_recipe_by_id(recipe_id)
     if recipe is None:
         return Response(status_code=404, content="Recipe not found")
     if recipe["status"] != "approved" and not is_admin(request):
         raise HTTPException(status_code=403, detail="This recipe hasn't been approved yet")
-    source_path = recipe["source_path"]
-    if not source_path or not os.path.exists(source_path):
-        return Response(status_code=404, content="Source file not found on disk (is the drive mounted?)")
-    return FileResponse(source_path)
+    pdf_path = _source_pdf_path(recipe_id)
+    if not os.path.exists(pdf_path):
+        return Response(status_code=404, content="No extracted page PDF for this recipe yet -- an admin needs to generate it first")
+    return FileResponse(pdf_path)
 
 
 @app.get("/recipes/{recipe_id}/edit")
@@ -1365,6 +1467,28 @@ async def edit_recipe(
     conn = sqlite3.connect("recipes.db")
     _run_recipe_qc_checks(conn, recipe_id)
     conn.close()
+
+    # Same idea, for a recipe's derived page PDF: if one already exists,
+    # a save is exactly the moment source_page/source_page_end may have
+    # just changed underneath it -- precisely what happens while
+    # reviewing a freshly-extracted book page by page and correcting a
+    # wrong page number. Keep it in sync automatically rather than
+    # requiring a separate "Regenerate" click every time. Deliberately
+    # does NOT create one for a recipe that's never had one generated --
+    # this only maintains an existing derived PDF, see
+    # generate_source_page_pdf()'s docstring.
+    pdf_path = _source_pdf_path(recipe_id)
+    if os.path.exists(pdf_path):
+        try:
+            generate_source_page_pdf(recipe_id)
+        except ValueError:
+            # source_page was cleared, or the source file's no longer on
+            # disk, on this edit -- the old derived PDF no longer
+            # corresponds to anything real, so remove it rather than
+            # leaving a stale file "View original page" would keep
+            # linking to.
+            os.remove(pdf_path)
+
     return RedirectResponse(url=f"/recipes/{recipe_id}", status_code=303)
 
 
@@ -1383,6 +1507,26 @@ def clone_recipe_route(recipe_id: int, _: None = Depends(require_admin)):
     _run_recipe_qc_checks(conn, new_id)
     conn.close()
     return RedirectResponse(url=f"/recipes/{new_id}/edit", status_code=303)
+
+
+@app.post("/recipes/{recipe_id}/generate_source_pdf")
+def generate_source_pdf_route(recipe_id: int, _: None = Depends(require_admin)):
+    """Admin-only "Generate"/"Regenerate page PDF" button on a recipe's
+    own page -- extracts source_page..source_page_end out of the
+    original book PDF into derived_pages/{id}.pdf via
+    generate_source_page_pdf(). Safe to click repeatedly -- e.g. after
+    correcting source_page -- since it always overwrites whatever was
+    there before, though edit_recipe() already does this automatically
+    once a derived PDF exists at all; this button is what creates the
+    first one, and covers a recipe that's never gone through the edit
+    form (most recipes, fresh out of extraction)."""
+    if get_recipe_by_id(recipe_id) is None:
+        return Response(status_code=404, content="Recipe not found")
+    try:
+        generate_source_page_pdf(recipe_id)
+    except ValueError as exc:
+        return Response(status_code=400, content=str(exc))
+    return RedirectResponse(url=f"/recipes/{recipe_id}", status_code=303)
 
 
 @app.post("/recipes/{recipe_id}/qc/{check_name}/ack")
@@ -1465,6 +1609,15 @@ def _delete_recipe_row(recipe_id: int):
     cursor.execute("DELETE FROM recipes WHERE id = ?", (recipe_id,))
     conn.commit()
     conn.close()
+    # Not a recipes.db row, but the same "don't leave orphaned state
+    # behind" principle this function exists to enforce (see the
+    # docstring above) -- a derived page PDF for a recipe id that no
+    # longer exists is just dead weight on disk, never reachable through
+    # the app (both PDF routes 404 once get_recipe_by_id comes back
+    # None), but there's no reason to leave it.
+    pdf_path = _source_pdf_path(recipe_id)
+    if os.path.exists(pdf_path):
+        os.remove(pdf_path)
 
 
 @app.delete("/recipes/{recipe_id}")

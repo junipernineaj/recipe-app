@@ -8,17 +8,21 @@ any time: from the command line, from a cron job, or from the
 /unit-tests admin page.
 
 The exceptions are check_delete_recipe_cleans_up_related_rows,
-check_clone_recipe_copies_correctly, and check_edit_recipe_saves_source_page,
-which have to actually exercise their routes to mean anything (a purely
-read-only check can only notice orphaned rows that already exist --
-that's exactly why check_no_orphaned_foreign_keys didn't catch either of
-the two times delete_recipe shipped broken; see PROJECT_HISTORY.md, "The
-delete_recipe fix that wasn't"). Each creates its own throwaway fixture
-recipe(s), tagged unmistakably as fixtures, and always deletes every trace
-of them itself in a finally block -- regardless of whether the check
-passes, fails, or raises -- so all three are still safe to run against
-production: worst case, one briefly creates and then removes a 'pending'
-recipe (or two) that was never visible on the site.
+check_clone_recipe_copies_correctly, check_edit_recipe_saves_source_page,
+check_generate_source_pdf_creates_extracted_file, and
+check_edit_recipe_regenerates_existing_source_pdf, which have to actually
+exercise their routes to mean anything (a purely read-only check can only
+notice orphaned rows -- or orphaned derived_pages/*.pdf files -- that
+already exist; that's exactly why check_no_orphaned_foreign_keys didn't
+catch either of the two times delete_recipe shipped broken; see
+PROJECT_HISTORY.md, "The delete_recipe fix that wasn't"). Each creates its
+own throwaway fixture recipe(s) (and, for the two PDF checks, a throwaway
+source PDF built here with PyMuPDF), tagged unmistakably as fixtures, and
+always deletes every trace of them itself in a finally block -- regardless
+of whether the check passes, fails, or raises -- so all five are still
+safe to run against production: worst case, one briefly creates and then
+removes a 'pending' recipe (or two) and a small PDF that was never visible
+on the site.
 
 Usage:
     python3 site_checks.py            # run once, print every result, save it
@@ -31,6 +35,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pymupdf as fitz
 from fastapi.testclient import TestClient
 from markupsafe import escape as _html_escape
 
@@ -454,6 +459,197 @@ def check_edit_recipe_saves_source_page(client):
         conn.close()
 
 
+def check_generate_source_pdf_creates_extracted_file(client):
+    """Creates a throwaway 'approved' fixture recipe pointing at pages 2-3
+    of a real, throwaway 3-page PDF (built here with PyMuPDF -- not
+    committed anywhere), then:
+
+      1. Confirms GET /recipes/{id}/source_page_pdf 404s before anything's
+         been generated -- there's nothing to serve yet.
+      2. POSTs to the real /recipes/{id}/generate_source_pdf route and
+         confirms derived_pages/{id}.pdf now exists with exactly the 2
+         pages source_page..source_page_end actually asked for -- not
+         all 3 pages of the source file, and not just 1.
+      3. Confirms GET /recipes/{id}/source_page_pdf now serves that file
+         to an ANONYMOUS request -- this file is meant to be exactly as
+         public as the recipe itself.
+      4. Confirms GET /recipes/{id}/source (the full original book)
+         403s/401s for that same anonymous request, and still works
+         (200) for an admin -- the point of this whole feature (see
+         ARCHITECTURE.md, "Per-recipe extracted page PDFs") is that the
+         full book stays admin-only even once a recipe is approved,
+         which wasn't true before this change.
+
+    Always deletes the fixture recipe, its derived_pages/{id}.pdf (if
+    created), and the throwaway source PDF, in a finally block."""
+    headers = _admin_headers()
+    if not headers:
+        return True, "skipped -- ADMIN_EMAILS isn't set in this environment"
+
+    marker = "__site_checks_source_pdf_fixture__"
+    source_pdf_path = REPO_ROOT / "__site_checks_fixture_source__.pdf"
+    doc = fitz.open()
+    for _ in range(3):
+        doc.new_page()
+    doc.save(source_pdf_path)
+    doc.close()
+
+    conn = sqlite3.connect("recipes.db")
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO recipes (title, source_book, source_path, source_page, source_page_end, "
+        "ingredients, instructions, status) VALUES (?, ?, ?, 2, 3, 'ing', 'inst', 'approved')",
+        (marker, marker, str(source_pdf_path)),
+    )
+    recipe_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+
+    derived_path = Path(main._source_pdf_path(recipe_id))
+    try:
+        before = client.get(f"/recipes/{recipe_id}/source_page_pdf")
+        if before.status_code != 404:
+            return False, f".../source_page_pdf returned {before.status_code} before anything was generated, expected 404"
+
+        r = client.post(f"/recipes/{recipe_id}/generate_source_pdf", headers=headers, follow_redirects=False)
+        if r.status_code != 303:
+            return False, f"POST .../generate_source_pdf returned {r.status_code}, expected 303"
+
+        if not derived_path.exists():
+            return False, f"{derived_path} wasn't created by generate_source_pdf"
+
+        extracted = fitz.open(derived_path)
+        page_count = extracted.page_count
+        extracted.close()
+        if page_count != 2:
+            return False, f"derived PDF has {page_count} page(s), expected 2 (source_page=2, source_page_end=3)"
+
+        served = client.get(f"/recipes/{recipe_id}/source_page_pdf")
+        if served.status_code != 200:
+            return False, f".../source_page_pdf returned {served.status_code} after generating (no admin header), expected 200"
+        if served.headers.get("content-type") != "application/pdf":
+            return False, f".../source_page_pdf returned content-type {served.headers.get('content-type')!r}, expected application/pdf"
+
+        full_book_anon = client.get(f"/recipes/{recipe_id}/source")
+        if full_book_anon.status_code not in (401, 403):
+            return False, f".../source (full book) returned {full_book_anon.status_code} with no admin header, expected 401/403"
+
+        full_book_admin = client.get(f"/recipes/{recipe_id}/source", headers=headers)
+        if full_book_admin.status_code != 200:
+            return False, f".../source (full book) returned {full_book_admin.status_code} for an admin, expected 200"
+
+        return True, None
+    finally:
+        if derived_path.exists():
+            derived_path.unlink()
+        source_pdf_path.unlink(missing_ok=True)
+        conn = sqlite3.connect("recipes.db")
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM recipe_qc_results WHERE recipe_id = ?", (recipe_id,))
+        cursor.execute("DELETE FROM recipes WHERE id = ?", (recipe_id,))
+        conn.commit()
+        conn.close()
+
+
+def check_edit_recipe_regenerates_existing_source_pdf(client):
+    """A recipe that already has a generated derived_pages/{id}.pdf should
+    have it automatically regenerated when source_page/source_page_end
+    change on a save (see edit_recipe()'s own comment in main.py) -- and
+    have it removed entirely if source_page is cleared back out. This is
+    exactly the workflow of reviewing a freshly-extracted book page by
+    page and correcting a wrong source_page: without this, "View original
+    page" would keep silently linking to the WRONG page (or a nonexistent
+    one) until someone remembered to click "Regenerate" separately.
+
+    Builds its own throwaway 2-page source PDF with two different page
+    sizes (100x100, then 200x300), generates a derived PDF for page 1,
+    edits the recipe to point at page 2 instead, and confirms the derived
+    PDF's page size changed to match -- proof it was actually
+    re-extracted, not left as a stale copy of page 1. Then clears
+    source_page entirely and confirms the now-stale derived PDF was
+    removed rather than left behind.
+
+    Always cleans up the fixture recipe, its derived_pages/{id}.pdf (if
+    still present), and the throwaway source PDF, in a finally block."""
+    headers = _admin_headers()
+    if not headers:
+        return True, "skipped -- ADMIN_EMAILS isn't set in this environment"
+
+    marker = "__site_checks_regen_fixture__"
+    source_pdf_path = REPO_ROOT / "__site_checks_fixture_regen_source__.pdf"
+    doc = fitz.open()
+    doc.new_page(width=100, height=100)
+    doc.new_page(width=200, height=300)
+    doc.save(source_pdf_path)
+    doc.close()
+
+    conn = sqlite3.connect("recipes.db")
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO recipes (title, source_book, source_path, source_page, "
+        "ingredients, instructions, status) VALUES (?, ?, ?, 1, 'ing', 'inst', 'pending')",
+        (marker, marker, str(source_pdf_path)),
+    )
+    recipe_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+
+    derived_path = Path(main._source_pdf_path(recipe_id))
+    try:
+        r = client.post(f"/recipes/{recipe_id}/generate_source_pdf", headers=headers, follow_redirects=False)
+        if r.status_code != 303:
+            return False, f"POST .../generate_source_pdf returned {r.status_code}, expected 303"
+        if not derived_path.exists():
+            return False, f"{derived_path} wasn't created"
+
+        extracted = fitz.open(derived_path)
+        before_rect = extracted[0].rect
+        extracted.close()
+        if (before_rect.width, before_rect.height) != (100, 100):
+            return False, f"derived PDF's page is {before_rect.width}x{before_rect.height}, expected 100x100 (source_page=1)"
+
+        r = client.post(
+            f"/recipes/{recipe_id}/edit", headers=headers,
+            data={"title": marker, "ingredients": "ing", "instructions": "inst", "source_page": "2"},
+            follow_redirects=False,
+        )
+        if r.status_code != 303:
+            return False, f"POST .../edit (source_page=2) returned {r.status_code}, expected 303"
+
+        if not derived_path.exists():
+            return False, "derived PDF was removed rather than regenerated after editing source_page"
+        extracted = fitz.open(derived_path)
+        after_rect = extracted[0].rect
+        extracted.close()
+        if (after_rect.width, after_rect.height) != (200, 300):
+            return False, (
+                f"derived PDF's page is still {after_rect.width}x{after_rect.height} after editing "
+                f"source_page to 2, expected 200x300 -- it wasn't regenerated"
+            )
+
+        r = client.post(
+            f"/recipes/{recipe_id}/edit", headers=headers,
+            data={"title": marker, "ingredients": "ing", "instructions": "inst", "source_page": ""},
+            follow_redirects=False,
+        )
+        if r.status_code != 303:
+            return False, f"POST .../edit (clearing source_page) returned {r.status_code}, expected 303"
+        if derived_path.exists():
+            return False, "derived PDF still exists after clearing source_page on an edit -- should have been removed"
+
+        return True, None
+    finally:
+        if derived_path.exists():
+            derived_path.unlink()
+        source_pdf_path.unlink(missing_ok=True)
+        conn = sqlite3.connect("recipes.db")
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM recipe_qc_results WHERE recipe_id = ?", (recipe_id,))
+        cursor.execute("DELETE FROM recipes WHERE id = ?", (recipe_id,))
+        conn.commit()
+        conn.close()
+
+
 def check_qc_backfill_up_to_date(client):
     """Catches the exact "QC: 2/5" confusion from before the score was
     broadened -- a recipe checked before a new rule was added shows fewer
@@ -529,6 +725,8 @@ CHECKS = [
     ("delete_recipe_cleans_up_related_rows", check_delete_recipe_cleans_up_related_rows),
     ("clone_recipe_copies_correctly", check_clone_recipe_copies_correctly),
     ("edit_recipe_saves_source_page", check_edit_recipe_saves_source_page),
+    ("generate_source_pdf_creates_extracted_file", check_generate_source_pdf_creates_extracted_file),
+    ("edit_recipe_regenerates_existing_source_pdf", check_edit_recipe_regenerates_existing_source_pdf),
     ("qc_backfill_up_to_date", check_qc_backfill_up_to_date),
     ("home_page_counts_match_database", check_home_page_counts_match_database),
     ("authors_page_lists_every_book", check_authors_page_lists_every_book),

@@ -651,6 +651,73 @@ described above. This section is the "how it fits together" overview;
   original page" would otherwise link to forever. Blank clears both back
   to NULL (hides the link entirely), same as a recipe with no source page
   at all.
+- **Per-recipe extracted page PDFs (added 2026-09-30)** -- `/recipes/{id}`
+  used to link "View original page" straight at `/recipes/{id}/source`,
+  which served the *entire* original book PDF (whatever
+  `recipe["source_path"]` pointed at), just with a `#page=N` fragment to
+  jump the viewer there -- slow for a large scanned cookbook, and, since
+  that route had no admin check for an approved recipe, open to any
+  visitor to page through or download in full. `generate_source_page_pdf()`
+  in `main.py` now extracts just `source_page`..`source_page_end` out of
+  the original book, with PyMuPDF (`import pymupdf as fitz`, the same
+  library and alias `pipeline/ocr_pass.py` already uses to verify OCR
+  text against this exact corpus of scanned PDFs -- see "Stage 2" below),
+  into its own small file at `{DERIVED_PAGES_DIR}/{id}.pdf`. The
+  original, compressed book PDF is never deleted or modified -- both
+  copies are kept, the small one just for fast, scoped serving.
+  `DERIVED_PAGES_DIR` is an environment variable, same
+  env-var-with-a-safe-default pattern as `ADMIN_EMAILS` (see "Admin
+  access control" below): it defaults to a plain relative
+  `derived_pages/` folder inside the repo checkout, deliberately, so
+  `.github/workflows/site-checks.yml` (see "Continuous integration"
+  below) -- which runs in GitHub's own cloud runner, with no access to
+  junipernine2's real disks -- always has somewhere writable to generate
+  its own throwaway fixture PDFs into, regardless of what junipernine2's
+  storage layout looks like. On the real server it's set to somewhere
+  with actual room, alongside the already-OCR'd/compressed books rather
+  than on `~/recipe-app`'s own disk -- see `RUNBOOK.md` → "Running the
+  web app".
+  - Generation is admin-triggered, not automatic: a "Generate"/
+    "Regenerate page PDF" button next to Edit/Clone on the recipe's own
+    page (`POST /recipes/{id}/generate_source_pdf`), which always
+    overwrites whatever was there before, so it's safe to click again.
+    There's no batch backfill tool yet for the 700+ existing approved
+    recipes -- generation is deliberately per-recipe and manual for now,
+    to see how the feature behaves in practice before automating it
+    further.
+  - `edit_recipe()` regenerates an *existing* derived PDF automatically
+    right after a save, the same way it already re-runs QC -- but only
+    if one already exists; it never creates the first one on its own.
+    This is what keeps "View original page" correct while working
+    through a book's `source_page` values by hand on the edit form,
+    without a separate click every time. If a save clears `source_page`
+    entirely, the now-stale derived PDF is deleted rather than left
+    behind.
+  - Visibility is deliberately split: the small derived PDF, served from
+    `GET /recipes/{id}/source_page_pdf`, is exactly as public as the
+    recipe itself (same approved-or-admin gate as every other public
+    route) -- 404s until generated. The full original book, still served
+    from `GET /recipes/{id}/source`, is now admin-only regardless of the
+    recipe's approval status, closing the exposure gap described above.
+    `templates/recipe_detail.html` shows regular visitors only the "View
+    original page" link (and only once `has_source_pdf` is true);
+    admins additionally get "View full book (admin)" (the old, unscoped
+    `#page=N` link into the whole file) and the Generate/Regenerate
+    button.
+  - `_delete_recipe_row()` (see "Reprocessing and recovery tooling"
+    above) removes a recipe's `derived_pages/{id}.pdf` too, if it has
+    one, for the same "don't leave orphaned state behind" reason it
+    already cleans up `recipe_reviews`/`recipe_qc_results`/
+    `recipe_relations`. `pipeline/remove_book_recipes.py`'s bulk deletes
+    do *not* do this cleanup yet -- a known, deliberately deferred gap;
+    harmless (both PDF routes 404 once the recipe id itself is gone, so
+    a leftover file is just unreachable dead weight on disk) rather than
+    a correctness risk.
+  - `pymupdf` is now a hard runtime dependency of the web app itself
+    (`requirements.txt`), not just an optional one for `pipeline/` --
+    unlike `ocr_pass.py`/`cookbook_inventory.py`, `main.py` imports it
+    unguarded, same as its other dependencies, since the app genuinely
+    can't serve a "Generate page PDF" button without it.
 - A separate, smaller idea logged here previously and still unbuilt: many
   filenames are messy (e.g. `...toOCR` suffixes) and shouldn't be used as
   the display title for extracted recipes. The plan agreed on was a

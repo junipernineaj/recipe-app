@@ -28,6 +28,7 @@ first place.
 
 ```
 export ADMIN_EMAILS="you@example.com"
+export DERIVED_PAGES_DIR="/media/aj9/Juniper13/cookbook_derived_pages"
 cd ~/recipe-app
 source venv/bin/activate
 uvicorn main:app --reload --host 0.0.0.0 --port 8000
@@ -36,6 +37,14 @@ uvicorn main:app --reload --host 0.0.0.0 --port 8000
 `ADMIN_EMAILS` must be exported *before* starting the app or nobody is
 admin, including you — see `ARCHITECTURE.md` → "Admin access control" for
 why that's a deliberate fail-closed default, not a bug.
+
+`DERIVED_PAGES_DIR` is optional — it's where generated per-recipe page
+PDFs (see "Generating a fast-loading page PDF for a recipe" below) get
+written. Left unset, it defaults to a plain `derived_pages/` folder
+inside `~/recipe-app` itself, which is fine for a scratch checkout but
+not for the real server: set it to somewhere on the same large drive the
+books themselves already live on (`/media/aj9/Juniper13/...`), not
+`~/recipe-app`'s own disk.
 
 ## The pipeline, stage by stage
 
@@ -543,6 +552,48 @@ From there:
 
 See `ARCHITECTURE.md` → "Recipe extraction, review, and QC" for exactly
 what does and doesn't get copied onto the clone, and why.
+
+## Generating a fast-loading page PDF for a recipe
+
+On a recipe's own page, admins now see a **Generate page PDF** button
+(next to Edit/Clone) once **Source page** is set. Click it, and the site
+extracts just that recipe's page(s) out of the original book PDF into
+their own small file, which is what "View original page" then links to
+for every visitor -- much faster than downloading the whole scanned book,
+which is what that link used to do.
+
+A few things worth knowing:
+
+- **Where the files land depends on `DERIVED_PAGES_DIR`** (see "Running
+  the web app" above) — set it on the real server before starting the
+  app, to a path on the same large drive the original books already sit
+  on, not `~/recipe-app`'s own disk. Left unset, generated files land in
+  a plain `derived_pages/` folder inside `~/recipe-app` -- fine for a
+  scratch checkout, not for junipernine2.
+- **This is per-recipe and manual.** There's no batch job that backfills
+  it for every recipe already approved -- until one's built, "View
+  original page" simply won't appear for a recipe nobody's clicked
+  Generate on yet. That's deliberate for now, to see how the feature
+  behaves before automating it.
+- **It's safe to click again**, and the button relabels itself
+  **Regenerate page PDF** once one exists -- useful if you've corrected
+  **Source page** since the last time.
+- **You don't usually need to click it again after an edit, though.** If
+  a recipe already has a generated page PDF, saving a change to **Source
+  page** / **Source page end** on the edit form regenerates it
+  automatically -- exactly the case that comes up while working through
+  a book's page numbers one recipe at a time. Clearing **Source page**
+  entirely on a save removes the generated PDF rather than leaving a
+  stale one behind.
+- **Admins get an extra link non-admins don't**: "View full book
+  (admin)" opens the complete original book PDF, jumped to the same
+  page -- useful for checking context (neighboring pages, whether the
+  extraction split a recipe correctly) that the small per-recipe file
+  doesn't show. Regular visitors never see this link or the underlying
+  route (`/recipes/{id}/source`) at all any more -- it's admin-only now,
+  where it used to be open to anyone viewing an approved recipe. See
+  `ARCHITECTURE.md` → "Recipe extraction, review, and QC" → "Per-recipe
+  extracted page PDFs" for the full design rationale.
 
 ## Running the site checks locally, before pushing
 

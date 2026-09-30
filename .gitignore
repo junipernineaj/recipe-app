@@ -6,8 +6,11 @@ __pycache__/
 recipes.db
 /media/aj9/Juniper13/cookbook_ocr_compressed
 /media/aj9/Juniper13/cookbook_ocr_output
+/media/aj9/Juniper13/cookbook_derived_pages
 *.sqlite
 *.log
 pipeline/inventory.csv
 site_check_results.json
 adhoc_scripts/
+derived_pages/
+__site_checks_fixture*.pdf
