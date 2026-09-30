@@ -546,7 +546,117 @@ link, no "extracted by" byline, and still `pending` (Approve/Reject
 showing) until approved by hand. Full CI suite run twice in an isolated
 `HOME`/venv -- 12/12 passed both times.
 
+## 2026-09-30 — Per-recipe extracted page PDFs
+
+With `source_page`/`source_page_end` now reliably correct and hand-
+editable (the Clone work above), Tony asked -- explicitly as a
+"consider, don't build yet" question -- whether standard Python PDF
+libraries, no AI involved, could split just a recipe's page(s) out of
+the original book into its own small PDF, named by the recipe's id, so
+"View original page" could load fast instead of pulling down a whole
+scanned cookbook every time.
+
+Answer: yes, easily, and this codebase already had the evidence in
+hand. `pipeline/ocr_pass.py` already depends on PyMuPDF (`import
+pymupdf as fitz`) to verify OCR text against this exact corpus of real
+scanned PDFs, and `pipeline/compress_pass.py`'s own comments note the
+corpus has "varied producers" that can trip up naive PDF tooling --
+concrete signal to reuse the library already proven against Tony's
+actual files rather than reach for `pypdf` in the abstract. Talking
+through the design surfaced a second, unplanned finding:
+`/recipes/{id}/source` (the "View original page" link) had never
+actually been admin-gated for an *approved* recipe -- any visitor could
+already page through or download the entire original book, not just the
+extracted recipe. Splitting out a small per-recipe file wasn't just a
+speed win, then; it was a chance to close that exposure at the same
+time, by making the full book admin-only and giving regular visitors
+only ever the small extracted file.
+
+Tony's refinement, once the shape was clear: a button to generate it on
+demand (not automatic), keep *both* files rather than replacing the
+original, and split visibility so end users only ever see the small
+file while admins keep a separate way to reach the full book. Built
+exactly that. `generate_source_page_pdf()` in `main.py` extracts
+`source_page`..`source_page_end` into `derived_pages/{id}.pdf` via
+PyMuPDF. A "Generate"/"Regenerate page PDF" button next to Edit/Clone on
+the recipe's own page (`POST /recipes/{id}/generate_source_pdf`, admin-
+only) triggers it by hand -- there's no batch backfill for the 700+
+already-approved recipes yet, deliberately: this ships as per-recipe and
+manual first, to see how it behaves before automating further, per
+Tony's own framing ("start work on actioning it -- and seeing how it
+behaves"). `GET /recipes/{id}/source_page_pdf` serves the small file
+with the same approved-or-admin gate as the recipe itself; `GET
+/recipes/{id}/source` (the full book) now requires admin unconditionally
+-- the fix for the exposure gap above.
+
+Because Tony is, right now, meticulously reviewing his first five
+scanned books and correcting exactly the `source_page` values this
+feature depends on, `edit_recipe()` was taught to regenerate an
+*existing* derived PDF automatically right after a save -- the same
+"don't make them click twice" reasoning it already applies to re-running
+QC -- but never to create the first one on its own; that's still an
+explicit, opt-in click. Clearing `source_page` entirely on a save
+deletes the now-stale derived PDF rather than leaving it to quietly link
+to the wrong (or no) page. `_delete_recipe_row()` (the same single
+delete path used by both the review-queue Reject button and a recipe's
+own Reject button, see "The delete_recipe fix that wasn't" below) now
+also removes a recipe's derived PDF, for the same "don't leave orphaned
+state behind" reason it already cleans up reviews/QC results/relations.
+One related gap was found and deliberately left alone rather than
+scope-creeping this change further: `pipeline/remove_book_recipes.py`'s
+bulk reprocessing deletes don't clean up derived PDFs for the recipes
+they remove. Logged here as harmless (both PDF routes check the recipe
+still exists first, so an orphaned file is just unreachable dead weight
+on disk) rather than fixed now.
+
+Two new checks in `site_checks.py`
+(`check_generate_source_pdf_creates_extracted_file`,
+`check_edit_recipe_regenerates_existing_source_pdf`) build their own
+throwaway multi-page source PDFs with PyMuPDF and exercise the real
+routes end to end: correct page count and content-type on generation, a
+404 for the small file before anything's generated, the full-book route
+now rejecting an anonymous request while still working for an admin,
+and -- using two source pages of deliberately different physical
+dimensions as proof of a genuine re-extraction rather than a stale
+copy -- that editing `source_page` regenerates an existing derived PDF
+to match, and that clearing it removes the file. Both clean up every
+fixture (recipe row, derived PDF, throwaway source PDF) in a `finally`
+block, so they're safe to run against production, same as the other
+route-exercising checks.
+
+Verified with Playwright before delivery, against a real multi-page
+test PDF and a live server: as admin, before generating, the actions
+row shows Generate/View full book (admin) but not "View original page"
+yet; after clicking Generate, it relabels to Regenerate, "View original
+page" appears labeled "pages 2–3", and the link actually serves a
+`application/pdf` response. As an anonymous visitor to the same
+(approved) recipe, only "View original page" shows -- no Edit, Clone,
+"View full book", or Generate/Regenerate -- and `/recipes/{id}/source`
+(the full book) now returns 403. Full CI suite (14 checks, including
+the 2 new ones) run twice in an isolated `HOME`/venv -- 14/14 passed
+both times.
+
+Before running any of this for real, Tony asked where the generated
+files would actually land, and, on hearing it was a plain
+`derived_pages/` folder inside `~/recipe-app`, immediately flagged the
+obvious problem: that's not where there's room on junipernine2. Rather
+than hardcoding `/media/aj9/Juniper13/cookbook_derived_pages` -- the
+drive the books themselves already live on -- directly into `main.py`,
+made it a `DERIVED_PAGES_DIR` environment variable instead, the same
+env-var-with-a-safe-default pattern `ADMIN_EMAILS` already uses.
+Reason: `.github/workflows/site-checks.yml` (see "Continuous
+integration" above) runs these same checks in GitHub's own cloud
+runner on every push, with no access to junipernine2's real disks at
+all -- hardcoding a junipernine2-only path would have broken that
+pipeline the moment this shipped. Left unset, it still defaults to the
+original relative `derived_pages/` folder, so CI keeps working exactly
+as before; set for real on junipernine2, exported the same way
+`ADMIN_EMAILS` already has to be before starting the app.
+
 ---
 
 *Still on the list, deliberately deferred: Tier 2 (the LLM-based semantic
-double-check of a recipe against its original PDF chunk).*
+double-check of a recipe against its original PDF chunk); a batch
+backfill for derived page PDFs on already-approved recipes;
+`remove_book_recipes.py` cleaning up derived page PDFs for the recipes
+it bulk-deletes.*
