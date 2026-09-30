@@ -43,6 +43,7 @@ a:hover { text-decoration: underline; }
 .back-link { display: inline-block; margin-bottom: 1.25rem; font-size: 0.9rem; color: var(--brown-mid); }
 
 .actions-row { display: flex; gap: 0.75rem; align-items: center; margin-bottom: 1.5rem; flex-wrap: wrap; }
+.actions-row form { display: contents; }
 
 .btn {
     display: inline-block;

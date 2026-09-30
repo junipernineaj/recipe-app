@@ -644,12 +644,13 @@ def create_recipe(title, source_book, ingredients, instructions):
     conn.close()
 
 
-def update_recipe(recipe_id, title, servings, prep_time, cook_time, ingredients, instructions, notes, flagged_for_review):
+def update_recipe(recipe_id, title, servings, prep_time, cook_time, ingredients, instructions, notes, flagged_for_review, source_page=None, source_page_end=None):
     conn = sqlite3.connect("recipes.db")
     conn.execute("""
         UPDATE recipes
         SET title = ?, servings = ?, prep_time = ?, cook_time = ?,
-            ingredients = ?, instructions = ?, notes = ?, flagged_for_review = ?
+            ingredients = ?, instructions = ?, notes = ?, flagged_for_review = ?,
+            source_page = ?, source_page_end = ?
         WHERE id = ?
     """, (
         title,
@@ -660,10 +661,93 @@ def update_recipe(recipe_id, title, servings, prep_time, cook_time, ingredients,
         instructions,
         notes or None,
         flagged_for_review or None,
+        source_page,
+        source_page_end,
         recipe_id,
     ))
     conn.commit()
     conn.close()
+
+
+def _parse_optional_page(value: str):
+    """A page-number form field -> int, or None if it's blank/not a plain
+    integer -- used for source_page/source_page_end on the edit form, which
+    (unlike everything else there) are stored as INTEGER columns, and
+    should clear back to NULL rather than storing an empty string when left
+    blank (recipe_detail.html's "View original page" link is gated on
+    recipe["source_page"] being truthy, so NULL is what actually hides it,
+    same as a recipe that never had a source page at all)."""
+    value = (value or "").strip()
+    return int(value) if value.isdigit() else None
+
+
+def clone_recipe(recipe_id: int) -> int:
+    """Creates a new recipe row that starts as an exact copy of the given
+    one -- same source_book/source_path/source_page(s)/ingredients/
+    instructions/servings/prep_time/cook_time/notes -- for the "this
+    recipe should exist but extraction missed it" case: clone the nearest
+    similar recipe from the same book as a starting template, then hand-edit
+    the clone into the real thing, rather than retyping a blank form or
+    rescanning the whole book (or even just the page range) to catch three
+    recipes. Copying source_book/source_path verbatim is exactly what
+    keeps the clone showing up in that book's "Needs"/"Works well with"
+    dropdowns (get_recipes_for_book matches on source_book) without any
+    extra work.
+
+    Four columns are deliberately NOT copied verbatim:
+      - title: prefixed "CLONE " so it's unmistakable in the review queue
+        and the book's recipe list until it's renamed to the real title.
+      - status: always 'pending', even when cloning an approved recipe --
+        otherwise a duplicate of the template's own ingredients would go
+        live on the site under a new id the moment it's created, before
+        anyone's had a chance to edit it.
+      - engine and extracted_at: cleared to NULL, the same state
+        add_recipe() already leaves them in for a recipe typed in from
+        scratch via "Add a recipe" -- both this app's date-filter/sort
+        ("no extraction date") and the recipe page's byline (the
+        "extracted by ..." line only shows when engine is set) already
+        treat NULL here as "not produced by the extraction pipeline",
+        which is exactly true of a clone's content once it's been hand-
+        edited, and copying the template's own engine/timestamp would
+        misrepresent it as a fresh model extraction.
+      - flagged_for_review is cleared to NULL too, for the same reason:
+        it's the extraction model's own note about ITS pass over the
+        template recipe, not something that happened to the clone.
+
+    The column list itself is read from the table (PRAGMA table_info)
+    rather than hand-maintained, since recipes' schema -- see
+    ARCHITECTURE.md, "The two databases" -- has grown by hand over time
+    with no single CREATE TABLE in code to keep a hand-written list in
+    sync with. Returns the new row's id."""
+    conn = sqlite3.connect("recipes.db")
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM recipes WHERE id = ?", (recipe_id,))
+    source = cursor.fetchone()
+    if source is None:
+        conn.close()
+        raise ValueError(f"No recipe with id {recipe_id}")
+
+    cursor.execute("PRAGMA table_info(recipes)")
+    columns = [row[1] for row in cursor.fetchall() if row[1] != "id"]
+
+    overrides = {
+        "title": f"CLONE {source['title']}",
+        "status": "pending",
+        "engine": None,
+        "extracted_at": None,
+        "flagged_for_review": None,
+    }
+    values = [overrides[col] if col in overrides else source[col] for col in columns]
+
+    column_list = ", ".join(columns)
+    placeholders = ", ".join("?" * len(columns))
+    cursor.execute(f"INSERT INTO recipes ({column_list}) VALUES ({placeholders})", values)
+    new_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    return new_id
+
 
 def get_reviews_for_recipe(recipe_id: int):
     conn = sqlite3.connect("recipes.db")
@@ -1260,12 +1344,17 @@ async def edit_recipe(
     instructions: str = Form(""),
     notes: str = Form(""),
     flagged_for_review: str = Form(""),
+    source_page: str = Form(""),
+    source_page_end: str = Form(""),
     _: None = Depends(require_admin),
 ):
     form = await request.form()
     needs_ids = [int(v) for v in form.getlist("needs_ids") if v]
     pairs_with_ids = [int(v) for v in form.getlist("pairs_with_ids") if v]
-    update_recipe(recipe_id, title, servings, prep_time, cook_time, ingredients, instructions, notes, flagged_for_review)
+    update_recipe(
+        recipe_id, title, servings, prep_time, cook_time, ingredients, instructions, notes, flagged_for_review,
+        source_page=_parse_optional_page(source_page), source_page_end=_parse_optional_page(source_page_end),
+    )
     set_recipe_relations(recipe_id, needs_ids, pairs_with_ids)
     # Re-run QC right after a save, not just on demand via the "Rerun
     # checks" button -- a save is exactly the moment the recipe's content
@@ -1277,6 +1366,23 @@ async def edit_recipe(
     _run_recipe_qc_checks(conn, recipe_id)
     conn.close()
     return RedirectResponse(url=f"/recipes/{recipe_id}", status_code=303)
+
+
+@app.post("/recipes/{recipe_id}/clone")
+def clone_recipe_route(recipe_id: int, _: None = Depends(require_admin)):
+    """Admin-only "Clone" button on a recipe's own page (see
+    templates/recipe_detail.html's .actions-row). Straight to the new
+    row's edit form afterward, not its own page or the review queue --
+    cloning only exists so the ingredients/instructions can be rewritten
+    into the actual missing recipe right away, and the edit form is where
+    that happens."""
+    if get_recipe_by_id(recipe_id) is None:
+        return Response(status_code=404, content="Recipe not found")
+    new_id = clone_recipe(recipe_id)
+    conn = sqlite3.connect("recipes.db")
+    _run_recipe_qc_checks(conn, new_id)
+    conn.close()
+    return RedirectResponse(url=f"/recipes/{new_id}/edit", status_code=303)
 
 
 @app.post("/recipes/{recipe_id}/qc/{check_name}/ack")

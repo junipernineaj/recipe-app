@@ -20,6 +20,9 @@
                 {% endif %}
                 {% if is_admin %}
                 <a href="/recipes/{{ recipe['id'] }}/edit" class="btn">Edit</a>
+                <form method="post" action="/recipes/{{ recipe['id'] }}/clone">
+                    <button type="submit" class="btn">Clone</button>
+                </form>
                 {% endif %}
             </div>
             {% endif %}

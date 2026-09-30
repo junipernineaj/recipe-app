@@ -2,7 +2,7 @@
 <html>
 <head>
     <title>Edit {{ recipe["title"] | titlecase }}</title>
-    <link rel="stylesheet" href="/static/style.css?v=5">
+    <link rel="stylesheet" href="/static/style.css?v=6">
 </head>
 <body>
     <div class="container">
@@ -11,6 +11,13 @@
         <form action="/recipes/{{ recipe['id'] }}/edit" method="post">
             <label>Title
                 <input type="text" name="title" value="{{ recipe['title'] }}" required>
+            </label>
+            <label>Source page
+                <input type="text" name="source_page" value="{{ recipe['source_page'] or '' }}" inputmode="numeric">
+            </label>
+            <label>Source page end (only if the recipe spans more than one page)
+                <input type="text" name="source_page_end" value="{{ recipe['source_page_end'] or '' }}" inputmode="numeric">
+                <span class="field-hint">Drives the "View original page(s)" link and the page range shown on the recipe's own page. Leave both blank if there's no source PDF page to link to.</span>
             </label>
             <label>Servings
                 <input type="text" name="servings" value="{{ recipe['servings'] or '' }}">

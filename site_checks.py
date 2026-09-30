@@ -7,17 +7,18 @@ recipes.db, so it's safe to run against the real production database at
 any time: from the command line, from a cron job, or from the
 /unit-tests admin page.
 
-The one exception is check_delete_recipe_cleans_up_related_rows, which
-has to actually exercise the delete route to mean anything (a purely
+The exceptions are check_delete_recipe_cleans_up_related_rows,
+check_clone_recipe_copies_correctly, and check_edit_recipe_saves_source_page,
+which have to actually exercise their routes to mean anything (a purely
 read-only check can only notice orphaned rows that already exist --
 that's exactly why check_no_orphaned_foreign_keys didn't catch either of
 the two times delete_recipe shipped broken; see PROJECT_HISTORY.md, "The
-delete_recipe fix that wasn't"). It creates its own throwaway fixture
-recipes, tagged unmistakably as fixtures, and always deletes every trace
+delete_recipe fix that wasn't"). Each creates its own throwaway fixture
+recipe(s), tagged unmistakably as fixtures, and always deletes every trace
 of them itself in a finally block -- regardless of whether the check
-passes, fails, or raises -- so it's still safe to run against production:
-worst case, it briefly creates and then removes two 'pending' recipes
-that were never visible on the site.
+passes, fails, or raises -- so all three are still safe to run against
+production: worst case, one briefly creates and then removes a 'pending'
+recipe (or two) that was never visible on the site.
 
 Usage:
     python3 site_checks.py            # run once, print every result, save it
@@ -282,6 +283,177 @@ def check_delete_recipe_cleans_up_related_rows(client):
         conn.close()
 
 
+def check_clone_recipe_copies_correctly(client):
+    """Creates a throwaway 'approved' fixture recipe with every column
+    filled in (including the ones that only matter for this check --
+    source_page_end/servings/prep_time/cook_time/notes/engine/
+    extracted_at/flagged_for_review -- so nothing passes by accident just
+    because it was already NULL), clones it through the real POST
+    /recipes/{id}/clone route, and checks the new row against
+    clone_recipe()'s documented contract in main.py: everything copied
+    verbatim except title (CLONE-prefixed), status (forced to 'pending'
+    even though the source here is 'approved' -- the whole point is that
+    a clone never goes live with the template's own ingredients under it),
+    and engine/extracted_at/flagged_for_review (cleared to NULL, the same
+    state add_recipe() already leaves a hand-typed recipe in).
+
+    Always cleans up both the original and the clone in a finally block,
+    including any recipe_qc_results the clone route's QC re-run creates
+    for the new row -- so it's safe to run against production."""
+    headers = _admin_headers()
+    if not headers:
+        return True, "skipped -- ADMIN_EMAILS isn't set in this environment"
+
+    marker = "__site_checks_clone_fixture__"
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds") + "Z"
+
+    conn = sqlite3.connect("recipes.db")
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO recipes "
+        "(title, source_book, source_path, source_page, source_page_end, ingredients, instructions, "
+        " servings, prep_time, cook_time, notes, status, engine, extracted_at, flagged_for_review) "
+        "VALUES (?, ?, 'fixture.pdf', 12, 13, 'ing', 'inst', '4', '10 min', '20 min', 'a note', "
+        "'approved', 'ci-fixture', ?, 'a flag')",
+        ("Fixture Original", marker, now),
+    )
+    original_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+
+    new_id = None
+    try:
+        r = client.post(f"/recipes/{original_id}/clone", headers=headers, follow_redirects=False)
+        if r.status_code != 303:
+            return False, f"POST /recipes/{original_id}/clone returned {r.status_code}, expected 303"
+
+        location = r.headers.get("location", "")
+        parts = location.strip("/").split("/")
+        if len(parts) != 3 or parts[0] != "recipes" or parts[2] != "edit" or not parts[1].isdigit():
+            return False, f"clone redirected to {location!r}, expected /recipes/<new id>/edit"
+        new_id = int(parts[1])
+
+        conn = sqlite3.connect("recipes.db")
+        conn.row_factory = sqlite3.Row
+        clone = conn.execute("SELECT * FROM recipes WHERE id = ?", (new_id,)).fetchone()
+        conn.close()
+
+        if clone is None:
+            return False, f"clone route redirected to id {new_id}, but no such recipe was created"
+
+        problems = []
+        if clone["title"] != "CLONE Fixture Original":
+            problems.append(f"title={clone['title']!r}, expected 'CLONE Fixture Original'")
+        if clone["status"] != "pending":
+            problems.append(f"status={clone['status']!r}, expected 'pending'")
+        if clone["engine"] is not None:
+            problems.append(f"engine={clone['engine']!r}, expected NULL")
+        if clone["extracted_at"] is not None:
+            problems.append(f"extracted_at={clone['extracted_at']!r}, expected NULL")
+        if clone["flagged_for_review"] is not None:
+            problems.append(f"flagged_for_review={clone['flagged_for_review']!r}, expected NULL")
+        for col, expected in [
+            ("source_book", marker), ("source_path", "fixture.pdf"), ("source_page", 12),
+            ("source_page_end", 13), ("ingredients", "ing"), ("instructions", "inst"),
+            ("servings", "4"), ("prep_time", "10 min"), ("cook_time", "20 min"), ("notes", "a note"),
+        ]:
+            if clone[col] != expected:
+                problems.append(f"{col}={clone[col]!r}, expected {expected!r} (copied from the source)")
+
+        if problems:
+            return False, "cloned recipe doesn't match clone_recipe()'s contract: " + "; ".join(problems)
+        return True, None
+    finally:
+        conn = sqlite3.connect("recipes.db")
+        cursor = conn.cursor()
+        for rid in (original_id, new_id):
+            if rid is None:
+                continue
+            cursor.execute("DELETE FROM recipe_reviews WHERE recipe_id = ?", (rid,))
+            cursor.execute("DELETE FROM recipe_qc_results WHERE recipe_id = ?", (rid,))
+            cursor.execute("DELETE FROM recipe_relations WHERE recipe_id = ? OR related_recipe_id = ?", (rid, rid))
+            cursor.execute("DELETE FROM recipes WHERE id = ?", (rid,))
+        conn.commit()
+        conn.close()
+
+
+def check_edit_recipe_saves_source_page(client):
+    """POSTs to the real /recipes/{id}/edit route with new source_page/
+    source_page_end values and confirms both the database row and the
+    recipe's own page (the "View original page" link's #page=... fragment)
+    reflect the change. Incidentally the first CI coverage update_recipe()/
+    edit_recipe() have ever had at all -- one UPDATE statement across every
+    editable column (title/servings/prep_time/cook_time/ingredients/
+    instructions/notes/flagged_for_review/source_page/source_page_end), so
+    a typo in any one of those column names now fails this check with a
+    clear sqlite3 error instead of only surfacing the next time someone
+    saves an edit in production. Also the first CI coverage of GET
+    /recipes/{id} itself, which is why ci_fixture_db.py's schema had to
+    gain servings/prep_time/cook_time/notes/source_page_end alongside this
+    check -- main.py's recipe_detail() route reads recipe["notes"]
+    unconditionally, so that route would 500 against the old fixture.
+
+    Always deletes the fixture recipe in a finally block, so it's safe to
+    run against production."""
+    headers = _admin_headers()
+    if not headers:
+        return True, "skipped -- ADMIN_EMAILS isn't set in this environment"
+
+    marker = "__site_checks_edit_fixture__"
+    conn = sqlite3.connect("recipes.db")
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO recipes (title, source_book, source_path, source_page, ingredients, instructions, status) "
+        "VALUES (?, ?, 'fixture.pdf', 1, 'ing', 'inst', 'pending')",
+        (marker, marker),
+    )
+    recipe_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+
+    try:
+        r = client.post(
+            f"/recipes/{recipe_id}/edit",
+            headers=headers,
+            data={
+                "title": marker,
+                "ingredients": "ing",
+                "instructions": "inst",
+                "source_page": "99",
+                "source_page_end": "101",
+            },
+            follow_redirects=False,
+        )
+        if r.status_code != 303:
+            return False, f"POST /recipes/{recipe_id}/edit returned {r.status_code}, expected 303"
+
+        conn = sqlite3.connect("recipes.db")
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT source_page, source_page_end FROM recipes WHERE id = ?", (recipe_id,)
+        ).fetchone()
+        conn.close()
+        if row["source_page"] != 99 or row["source_page_end"] != 101:
+            return False, (
+                f"expected source_page=99/source_page_end=101 after editing, "
+                f"got {row['source_page']}/{row['source_page_end']}"
+            )
+
+        detail = client.get(f"/recipes/{recipe_id}", headers=headers)
+        if detail.status_code != 200:
+            return False, f"GET /recipes/{recipe_id} returned {detail.status_code} after editing source_page"
+        if "#page=99" not in detail.text:
+            return False, "recipe page doesn't link to #page=99 after editing source_page"
+        return True, None
+    finally:
+        conn = sqlite3.connect("recipes.db")
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM recipe_qc_results WHERE recipe_id = ?", (recipe_id,))
+        cursor.execute("DELETE FROM recipes WHERE id = ?", (recipe_id,))
+        conn.commit()
+        conn.close()
+
+
 def check_qc_backfill_up_to_date(client):
     """Catches the exact "QC: 2/5" confusion from before the score was
     broadened -- a recipe checked before a new rule was added shows fewer
@@ -355,6 +527,8 @@ CHECKS = [
     ("static_css_intact", check_static_css_intact),
     ("no_orphaned_foreign_keys", check_no_orphaned_foreign_keys),
     ("delete_recipe_cleans_up_related_rows", check_delete_recipe_cleans_up_related_rows),
+    ("clone_recipe_copies_correctly", check_clone_recipe_copies_correctly),
+    ("edit_recipe_saves_source_page", check_edit_recipe_saves_source_page),
     ("qc_backfill_up_to_date", check_qc_backfill_up_to_date),
     ("home_page_counts_match_database", check_home_page_counts_match_database),
     ("authors_page_lists_every_book", check_authors_page_lists_every_book),

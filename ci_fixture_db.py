@@ -13,7 +13,13 @@ specifically so it can never be run by accident against real data.
 
 If a future feature selects a column that isn't set up below, CI will fail
 with a clear "no such column" error rather than silently passing; when that
-happens, just add the column here too.
+happens, just add the column here too. (source_page_end/servings/prep_time/
+cook_time/notes were added 2026-09-30 for exactly this reason -- the recipe
+detail page and update_recipe() had been reading/writing them since before
+this fixture existed, but nothing in CHECKS had ever actually rendered
+/recipes/{id} or posted to /recipes/{id}/edit until the clone-recipe and
+edit-source-page checks did, at which point the gap would otherwise have
+surfaced as a hard CI failure rather than earlier, in review.)
 """
 import os
 import sqlite3
@@ -41,8 +47,13 @@ def build_recipes_db():
             source_book TEXT,
             source_path TEXT,
             source_page INTEGER,
+            source_page_end INTEGER,
             ingredients TEXT,
             instructions TEXT,
+            servings TEXT,
+            prep_time TEXT,
+            cook_time TEXT,
+            notes TEXT,
             status TEXT NOT NULL DEFAULT 'approved',
             engine TEXT,
             flagged_for_review TEXT,
