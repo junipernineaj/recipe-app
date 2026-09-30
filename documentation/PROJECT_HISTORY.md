@@ -485,6 +485,67 @@ a different one containing an apostrophe. Confirmed the original check
 false-positives on it, the first attempt at a fix still false-positives
 on it, and the final version passes.
 
+## 2026-09-30 — Cloning a recipe to fill in an extraction gap by hand
+
+Tony did a careful pass through Tim Anderson's *Japaneasy* after the
+`--before-id` reprocessing job (see above) and found it about 95%
+complete -- but three whole recipes that extraction had simply missed.
+Rescanning the whole book, or even just those three pages, felt
+disproportionate for three recipes when 700+ books are still ahead of
+this one. His proposal: a "Clone" function on a recipe's own page --
+copy an existing recipe from the same book as a template, then hand-edit
+the copy into the real, missing recipe, with the new row's title prefixed
+"CLONE " so it's unmistakable until it's renamed.
+
+Built exactly that: a "Clone" button next to Edit on
+`templates/recipe_detail.html`, calling a new `clone_recipe()` in
+`main.py` that copies every column of the source row except four,
+deliberately: `title` (prefixed "CLONE "), `status` (forced to `pending`,
+even from an `approved` source, so a duplicate never goes live before
+it's edited), and `engine`/`extracted_at`/`flagged_for_review` (cleared to
+NULL -- they describe the *template's* extraction, not the new recipe,
+and `add_recipe()` already leaves a hand-typed recipe in this same
+state). The column list itself is read from `PRAGMA table_info(recipes)`
+rather than hand-maintained, since (per "The two databases" above)
+`recipes`' schema has never had a single `CREATE TABLE` in code to keep a
+hand-written list in sync with. Cloning redirects straight to the new
+row's edit form, since the whole point is to rewrite it immediately.
+
+Copying `source_book`/`source_path` verbatim was the easy part -- it's
+what already makes the clone show up correctly in that book's "Needs"/
+"Works well with" dropdowns, with no extra code. `source_page`/
+`source_page_end` needed more thought: they get copied too (same page as
+the template, wrong for the actual missing recipe), and until now weren't
+editable anywhere in the app at all. Added them to the recipe edit form
+and to `update_recipe()`, so a clone's "View original page" link can be
+pointed at the recipe's real page rather than stuck on the template's
+forever.
+
+Also surfaced, in the course of testing this for real: `site_checks.py`
+had never actually exercised `GET /recipes/{id}` or the edit-save path at
+all -- every existing check either stayed off those routes entirely or
+(like `check_delete_recipe_cleans_up_related_rows`) exercised a different
+route. `ci_fixture_db.py`'s fixture schema was missing `source_page_end`/
+`servings`/`prep_time`/`cook_time`/`notes` as a direct result --
+`main.py` had been reading and writing all five for a while, just never
+under CI. Added two new checks (`check_clone_recipe_copies_correctly`,
+exercising the clone route end to end against every field in the
+contract above; `check_edit_recipe_saves_source_page`, the first real
+coverage of the edit route and, incidentally, of a recipe's own page
+rendering at all) and extended the fixture schema to match -- both build
+their own throwaway fixtures and clean up in a `finally` block, so
+they're safe to run against production.
+
+Verified with Playwright end to end before delivery: cloned a
+fully-populated fixture recipe, confirmed the new row's edit form was
+pre-filled with every copied field and the "CLONE " title, rewrote it
+into a different recipe (new title, ingredients, instructions, and a
+corrected `source_page`), saved, and confirmed the result showed the new
+title with no "CLONE" left anywhere, the corrected "View original page"
+link, no "extracted by" byline, and still `pending` (Approve/Reject
+showing) until approved by hand. Full CI suite run twice in an isolated
+`HOME`/venv -- 12/12 passed both times.
+
 ---
 
 *Still on the list, deliberately deferred: Tier 2 (the LLM-based semantic

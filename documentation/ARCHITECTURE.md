@@ -609,6 +609,48 @@ described above. This section is the "how it fits together" overview;
   page rather than jumping to `/review`, since unapproving is usually the
   first step toward fixing something on that exact recipe, not a
   queue-clearing action.
+- **Reprocessing and recovery tooling** -- `pipeline/remove_book_recipes.py`
+  (dry run by default) is the one tool for all three "something about
+  this book's extraction needs fixing" scenarios: clearing the losing
+  duplicates after a side-by-side re-extraction (`--status pending`), a
+  full clean replace before starting a book over from scratch (`--apply
+  --clear-extraction-log`), and trimming just the broken range of a
+  partial run that went wrong midway through (`--before-id`, added
+  2026-09-28 after the Japaneasy incident -- everything below the given
+  id is deleted for that book, everything at or above it is left alone).
+  It always cleans up the matched recipes' `recipe_reviews`/
+  `recipe_qc_results`/`recipe_relations` rows along with the `recipes`
+  rows themselves, the same as `delete_recipe` does for one recipe (see
+  "The two databases" above) -- see `RUNBOOK.md` → "Reprocessing a book
+  with different chunk settings" for the exact commands and when to
+  reach for which mode.
+- **Cloning a recipe (added 2026-09-30)** -- `clone_recipe()` in
+  `main.py`, triggered by a "Clone" button next to Edit on a recipe's own
+  page, for the case the reprocessing tooling above doesn't fit: a
+  handful of individual recipes an extraction run missed entirely (the
+  Japaneasy incident again -- 95% of the book was fine, three recipes
+  just weren't there at all), not a whole-book problem. Copies every
+  column of the source recipe -- read from `PRAGMA table_info(recipes)`
+  rather than a hand-maintained list, for the same "no single CREATE
+  TABLE to stay in sync with" reason described above -- except four:
+  `title` (prefixed "CLONE "), `status` (forced to `pending` even when
+  cloning an `approved` recipe, so a duplicate never goes live before
+  it's edited), and `engine`/`extracted_at`/`flagged_for_review` (cleared
+  to NULL, the same state `add_recipe()` already leaves a hand-typed
+  recipe in, since these describe the *template's* extraction, not the
+  clone's). Redirects straight to the new row's edit form, since cloning
+  only exists so the content can be rewritten immediately. Copying
+  `source_book`/`source_path` verbatim is what keeps the clone showing up
+  correctly in that book's "Needs"/"Works well with" dropdowns
+  automatically, with no extra work.
+- **Source page / source page end, editable (added 2026-09-30)** -- the
+  recipe edit form and `update_recipe()` now accept `source_page`/
+  `source_page_end`, previously set only at extraction time and never
+  editable afterward. Needed for cloning to be useful at all: a clone
+  starts out pointing at the template's page number(s), which "View
+  original page" would otherwise link to forever. Blank clears both back
+  to NULL (hides the link entirely), same as a recipe with no source page
+  at all.
 - A separate, smaller idea logged here previously and still unbuilt: many
   filenames are messy (e.g. `...toOCR` suffixes) and shouldn't be used as
   the display title for extracted recipes. The plan agreed on was a

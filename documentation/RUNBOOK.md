@@ -437,7 +437,7 @@ every recipe a chunk returns, so re-extracting without clearing the old
 rows first just piles new rows on top of the old ones rather than
 replacing them.
 
-Two ways to handle this, both using `pipeline/remove_book_recipes.py`
+Three ways to handle this, all using `pipeline/remove_book_recipes.py`
 (dry run by default -- always look at the report before `--apply`):
 
 **Compare side-by-side (recommended)** -- re-extract straight into the
@@ -491,6 +491,58 @@ used automatically unless you pass a different value. Everything still
 lands as `pending` and needs the usual review-queue pass
 before it's visible on the site -- this skips the side-by-side comparison,
 not the review step.
+
+**Trim a bad partial run** -- if a re-extraction went wrong partway
+through (crashed, wrong page range, pointed at the wrong PDF) and you can
+see in the review queue exactly where it turns from garbage to good --
+say everything below id 2145 is junk and 2145 onward is fine -- use
+`--before-id` to remove just that broken range and leave the rest alone:
+
+```
+python3 remove_book_recipes.py --book "Author - Title" --before-id 2145
+python3 remove_book_recipes.py --book "Author - Title" --before-id 2145 --apply
+```
+
+Matches recipes with `id < 2145` for that book, any status, and deletes
+them along with their `recipe_reviews`/`recipe_qc_results`/
+`recipe_relations` rows -- id 2145 and above (and their related rows) are
+left completely alone. Can't be combined with `--clear-extraction-log`:
+the log has no recipe id in it, only `source_path`, so clearing it here
+would wipe the book's *whole* extraction history, including the chunks
+behind the recipes you just kept -- there's no way to clear only the log
+entries behind the deleted range. If you do want a totally clean slate
+afterward, that's what "Clean replace" above is for.
+
+## Filling in a recipe extraction missed entirely
+
+If a handful of individual recipes are just missing from a book -- not a
+whole-book extraction problem, just an extraction run skipping a page or
+two -- rescanning the whole book, or even just those pages, is overkill.
+Instead, on the recipe's own page, use the **Clone** button (next to
+Edit): it creates a new row that's an exact copy of the one you're
+viewing -- same book, same source PDF, same page number(s), same
+ingredients/instructions/servings/timing/notes -- with the title prefixed
+"CLONE " and the new row always starting as `pending`, then drops you
+straight onto that new row's edit form.
+
+From there:
+
+1. Rewrite the title, ingredients, and instructions into the actual
+   missing recipe, reading from the book itself -- "View original page"
+   on the template recipe is a good jumping-off point to find the right
+   part of the book.
+2. Fix **Source page** / **Source page end** on the edit form to point at
+   the real recipe's page(s), not the template's -- these weren't
+   editable anywhere in the app before this feature, so a hand-added or
+   cloned recipe can now get a correct "View original page" link.
+3. Double-check Servings/Prep time/Cook time/Notes too -- these get
+   copied from the template along with everything else, and are easy to
+   forget since the ingredients/instructions boxes are what naturally
+   draw attention.
+4. Approve it once it looks right, same as any other pending recipe.
+
+See `ARCHITECTURE.md` → "Recipe extraction, review, and QC" for exactly
+what does and doesn't get copied onto the clone, and why.
 
 ## Running the site checks locally, before pushing
 
