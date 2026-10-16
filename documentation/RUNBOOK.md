@@ -26,25 +26,80 @@ first place.
 
 ## Running the web app
 
+In production this runs as a systemd service (`recipe-app.service`),
+not a manually-started process — set up so a reboot brings it back on
+its own, and bound to `127.0.0.1` rather than `0.0.0.0` so the app is
+never reachable except through the Cloudflare Tunnel + Access in front
+of it. See "Admin access control" in `ARCHITECTURE.md` for why that
+binding matters — it closes a gap that section used to document as a
+known, accepted risk.
+
 ```
-export ADMIN_EMAILS="you@example.com"
+# /etc/systemd/system/recipe-app.service
+[Unit]
+Description=Recipe app (uvicorn)
+After=network-online.target
+Wants=network-online.target
+RequiresMountsFor=/media/aj9/Juniper13
+
+[Service]
+User=aj9
+WorkingDirectory=/home/aj9/recipe-app
+Environment="ADMIN_EMAILS=anthony@junipernine.com"
+Environment="DERIVED_PAGES_DIR=/media/aj9/Juniper13/cookbook_derived_pages"
+ExecStart=/home/aj9/recipe-app/venv/bin/uvicorn main:app --host 127.0.0.1 --port 8000
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+```
+
+`RequiresMountsFor=/media/aj9/Juniper13` makes systemd wait for that
+drive to actually be mounted before starting the app — `DERIVED_PAGES_DIR`
+lives there, so without this a reboot could race the app ahead of the
+mount.
+
+`ADMIN_EMAILS` and `DERIVED_PAGES_DIR` are set here as `Environment=`
+lines in the unit file rather than exported by hand — same variables,
+same requirement (`ADMIN_EMAILS` must be set or nobody is admin,
+including you — see `ARCHITECTURE.md` → "Admin access control" for why
+that's a deliberate fail-closed default, not a bug), just set once in
+the service file instead of every time you start it.
+
+Day to day:
+
+```
+sudo systemctl status recipe-app
+sudo systemctl restart recipe-app
+sudo journalctl -u recipe-app -f        # tail logs
+```
+
+The service is enabled, so it starts automatically on boot — after the
+Juniper13 mount, per `RequiresMountsFor` above.
+
+To change anything in the unit file (an env var, the port, ...), edit
+`/etc/systemd/system/recipe-app.service` directly, then:
+
+```
+sudo systemctl daemon-reload
+sudo systemctl restart recipe-app
+```
+
+For quick manual testing outside the service — e.g. with `--reload`
+while actively changing code — stop the service first so the two
+don't fight over port 8000, and keep the same `127.0.0.1` binding so
+you don't accidentally expose the app while testing:
+
+```
+sudo systemctl stop recipe-app
+export ADMIN_EMAILS="anthony@junipernine.com"
 export DERIVED_PAGES_DIR="/media/aj9/Juniper13/cookbook_derived_pages"
 cd ~/recipe-app
 source venv/bin/activate
-uvicorn main:app --reload --host 0.0.0.0 --port 8000
+uvicorn main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-`ADMIN_EMAILS` must be exported *before* starting the app or nobody is
-admin, including you — see `ARCHITECTURE.md` → "Admin access control" for
-why that's a deliberate fail-closed default, not a bug.
-
-`DERIVED_PAGES_DIR` is optional — it's where generated per-recipe page
-PDFs (see "Generating a fast-loading page PDF for a recipe" below) get
-written. Left unset, it defaults to a plain `derived_pages/` folder
-inside `~/recipe-app` itself, which is fine for a scratch checkout but
-not for the real server: set it to somewhere on the same large drive the
-books themselves already live on (`/media/aj9/Juniper13/...`), not
-`~/recipe-app`'s own disk.
+Remember `sudo systemctl start recipe-app` again afterward.
 
 ## The pipeline, stage by stage
 

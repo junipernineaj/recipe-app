@@ -653,10 +653,43 @@ original relative `derived_pages/` folder, so CI keeps working exactly
 as before; set for real on junipernine2, exported the same way
 `ADMIN_EMAILS` already has to be before starting the app.
 
+## 2026-10-16 — Recipe app moved to a systemd service, closing the 0.0.0.0 LAN-exposure gap
+
+The recipe app was being started by hand
+(`uvicorn main:app --reload --host 0.0.0.0 --port 8000`, run manually
+after every reboot) — fine for active development, but it meant a
+server reboot took the site down until someone logged in and restarted
+it, and `ARCHITECTURE.md` had carried a "known, accepted gap" since
+2026-09-24 about binding to `0.0.0.0`: anyone on the home LAN who
+crafted a request with `Cf-Access-Authenticated-User-Email` set could
+be treated as admin, since nothing verified that header
+cryptographically — accepted at the time given who's actually on the
+network, but never actually desirable.
+
+Moved it to a systemd service (`/etc/systemd/system/recipe-app.service`),
+enabled so it starts on boot, with `RequiresMountsFor=/media/aj9/Juniper13`
+so it waits for that drive before starting (`DERIVED_PAGES_DIR` lives
+there). `ADMIN_EMAILS` and `DERIVED_PAGES_DIR` now live in the unit
+file's `Environment=` lines instead of being exported by hand each
+time. Bound uvicorn to `127.0.0.1` instead of `0.0.0.0` while at it,
+closing the LAN-exposure gap outright — the app is now reachable only
+through the Cloudflare Tunnel, where Cloudflare Access really is the
+only thing able to set the auth header. Updated `RUNBOOK.md` →
+"Running the web app" and `ARCHITECTURE.md` → "Admin access control"
+to match.
+
+Two follow-ups flagged alongside this, not yet done: upgrading
+`cloudflared` on junipernine2 (logs still showing 2026.9.1), and a real
+reboot test to confirm the service and the Juniper13 mount actually
+come up cleanly together, rather than just reasoning about
+`RequiresMountsFor` on paper.
+
 ---
 
 *Still on the list, deliberately deferred: Tier 2 (the LLM-based semantic
 double-check of a recipe against its original PDF chunk); a batch
 backfill for derived page PDFs on already-approved recipes;
 `remove_book_recipes.py` cleaning up derived page PDFs for the recipes
-it bulk-deletes.*
+it bulk-deletes; and confirming the recipe-app systemd service and the
+Juniper13 mount survive a real reboot together (`RequiresMountsFor` is
+untested so far).*

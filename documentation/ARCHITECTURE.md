@@ -420,25 +420,24 @@ How it works:
   — that's a deliberate fail-closed default, not a bug. If Edit/Approve/
   "Not a cookbook" go missing or start 403ing after a restart, check this
   first.
-- **Known, accepted gap:** uvicorn binds to `0.0.0.0`, not `127.0.0.1`,
-  so the app is reachable directly over the home LAN (e.g. from a Mac at
+- **Fixed 2026-10-16:** this used to bind to `0.0.0.0` instead of
+  `127.0.0.1`, reachable directly over the home LAN (e.g. from a Mac at
   `http://<junipernine2-LAN-IP>:8000`), not just through the Cloudflare
-  Tunnel — this is deliberate, for convenience managing a headless box
-  from elsewhere on the network. The consequence: the
-  `Cf-Access-Authenticated-User-Email` header is only genuinely
-  trustworthy when Cloudflare Access is the only thing that can set it,
-  and that stops being true once the app is reachable directly. A device
-  on the LAN that specifically crafted a request with that header set
-  (e.g. `curl -H "Cf-Access-Authenticated-User-Email: you@example.com"`)
-  would be treated as admin — nothing here verifies the header
-  cryptographically. Ordinary browsing from a LAN device does *not*
-  grant admin (browsers don't send this header on their own), so this
-  isn't a hole a casual visitor stumbles into, but it isn't a hard
-  boundary against anyone on the network who goes looking for it either.
-  Accepted as-is (2026-09-24) given who's actually on this home network;
-  if that ever changes, the fix is either binding back to `127.0.0.1`
-  (loses direct-LAN access) or switching to verifying Cloudflare's JWT
-  (`Cf-Access-Jwt-Assertion`) instead of trusting the plain header.
+  Tunnel — deliberate at the time, for convenience managing a headless
+  box from elsewhere on the network. The consequence was that the
+  `Cf-Access-Authenticated-User-Email` header was only genuinely
+  trustworthy because Cloudflare Access was the only thing reaching the
+  app directly over HTTP; once it wasn't, a device on the LAN that
+  specifically crafted a request with that header set (e.g.
+  `curl -H "Cf-Access-Authenticated-User-Email: you@example.com"`) would
+  have been treated as admin, since nothing here verifies the header
+  cryptographically. Now that the app runs as a systemd service bound to
+  `127.0.0.1` (see `RUNBOOK.md` → "Running the web app"), that path
+  doesn't exist any more — the only way in is through the Tunnel, where
+  Cloudflare Access really is the sole thing able to set the header.
+  Direct-LAN convenience access is the trade-off given up to close this;
+  if that's ever missed, use SSH port forwarding or a LAN-only Tunnel
+  route rather than reopening `0.0.0.0`.
 - Gated routes, by area (this list is easy to let go stale as new admin
   features get added — if in doubt, `grep` `main.py` for
   `Depends(require_admin)` rather than trusting it blindly):
