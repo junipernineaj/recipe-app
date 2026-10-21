@@ -101,6 +101,77 @@ uvicorn main:app --reload --host 127.0.0.1 --port 8000
 
 Remember `sudo systemctl start recipe-app` again afterward.
 
+## Restarting after a deploy
+
+The service runs a single uvicorn worker with no `--reload` (removed
+deliberately when this moved off a manually-started process — see
+above, and `ARCHITECTURE.md` → "Admin access control"), so a
+`git pull` on its own changes nothing live: Python code (`main.py`,
+`site_checks.py`, `pipeline/*.py`) only takes effect once the process
+actually restarts. Templates (`templates/*.html`) and
+`static/style.css` are the exception — Jinja2's `auto_reload` (on by
+default, never overridden here) re-checks a template's mtime on every
+render, and `StaticFiles` always reads straight from disk, so those
+two take effect immediately with no restart at all.
+
+As of 2026-10-21, the restart itself is automatic: a `post-merge` git
+hook (`githooks/post-merge`, tracked in the repo — wired up via
+`core.hooksPath`, see one-time setup below) restarts
+`recipe-app.service` the moment `git pull` (or any `git merge`)
+actually brings in new commits. `git pull` is now the whole deploy
+step — there's no second command to remember, and nothing to restart
+by hand after a routine pull. It restarts unconditionally on every
+merge, even one that only touched a `.md` file — deliberately not
+smart about which files actually changed; see
+`documentation/PROJECT_HISTORY.md`, "Automatic restart on deploy, via
+a git post-merge hook" for why.
+
+One-time setup per clone (already done on the real junipernine2
+checkout — this is only needed again for a fresh clone, or a new one
+elsewhere):
+
+```
+cd ~/recipe-app
+git config core.hooksPath githooks
+```
+
+The hook needs `sudo systemctl restart recipe-app` to actually work,
+which means it needs to run without a password prompt — add a
+narrowly-scoped sudoers rule for exactly that one command (confirm the
+real path first; don't assume it's `/usr/bin/systemctl`):
+
+```
+which systemctl
+sudo visudo -f /etc/sudoers.d/recipe-app-restart
+```
+
+and put exactly this in it (substituting the real path from
+`which systemctl` if it differs), then save and exit:
+
+```
+aj9 ALL=(root) NOPASSWD: /usr/bin/systemctl restart recipe-app
+```
+
+`visudo` validates the syntax before it's written, so a typo here
+can't break `sudo` itself the way hand-editing `/etc/sudoers` directly
+could.
+
+To test the hook on its own, independent of git (confirms it actually
+restarts the service and reports success or failure correctly,
+without needing a real merge to trigger it):
+
+```
+cd ~/recipe-app
+./githooks/post-merge
+sudo systemctl status recipe-app
+```
+
+The real end-to-end test is just the next ordinary `git pull` — watch
+for "post-merge: recipe-app restarted OK" in its output. To skip the
+restart for one pull (e.g. while mid-way through hand-editing
+something else and not ready for it to go live yet), temporarily unset
+the hook path: `git -c core.hooksPath= pull`.
+
 ## The pipeline, stage by stage
 
 All three scripts are **safe to re-run** — pass `--resume` and each one

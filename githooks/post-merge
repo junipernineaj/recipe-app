@@ -1,0 +1,33 @@
+#!/bin/sh
+# git post-merge hook -- git invokes this automatically right after a
+# successful `git merge` (including the fast-forward merge a plain
+# `git pull` does under the hood), and ONLY when something actually
+# got merged -- never on a no-op "Already up to date" pull. See
+# documentation/RUNBOOK.md, "Restarting after a deploy".
+#
+# The app runs as a systemd service with no --reload, so a `git pull`
+# on its own doesn't make new Python code live -- the process has to
+# actually restart. This makes that automatic: `git pull` is now the
+# whole deploy step.
+#
+# Restarts unconditionally, regardless of which files the merge
+# touched -- deliberately not smart about it. See
+# documentation/PROJECT_HISTORY.md, "Automatic restart on deploy, via
+# a git post-merge hook" for why.
+#
+# Needs this repo's git to be configured with:
+#   git config core.hooksPath githooks
+# and a one-time sudoers rule letting this run without a password
+# prompt -- both are one-time setup steps, documented in RUNBOOK.md,
+# not something this hook (or any script) sets up on its own.
+
+echo "post-merge: restarting recipe-app..."
+sudo systemctl restart recipe-app
+
+if sudo systemctl is-active --quiet recipe-app; then
+    echo "post-merge: recipe-app restarted OK"
+else
+    echo "post-merge: WARNING -- recipe-app is not active after restart." >&2
+    echo "post-merge: check: sudo journalctl -u recipe-app -n 50" >&2
+    exit 1
+fi

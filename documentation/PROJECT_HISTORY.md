@@ -684,12 +684,109 @@ reboot test to confirm the service and the Juniper13 mount actually
 come up cleanly together, rather than just reasoning about
 `RequiresMountsFor` on paper.
 
+## 2026-10-21 — Boards: a shared place to collect and refine recipes for a project
+
+Tony's own use case: planning Christmas, flipping through recipes in
+the app, wanting to say "add that one to my Christmas Ideas board for
+consideration" as he went — then, later, have his family weigh in on
+which of the candidates actually make the final list. Asked,
+explicitly as a "spec it out, don't build it yet" request: how would a
+"create a project, then add recipes to it from their own page"
+workflow actually work here?
+
+Proposed a shape, then refined it once Tony's actual requirements came
+back: boards should be open to anyone who reaches the site through
+Cloudflare Access — not admin-gated — both to create a board and to
+add or remove recipes from one, since this is exactly the kind of
+thing a family member other than Tony would want to do without
+needing admin rights. Recipes needed to stay completely undestructible
+through any board action — removing one from a board (or clearing it
+off every board) must never be a path to deleting the recipe itself,
+only `_delete_recipe_row()` is ever allowed to do that. Each board
+needed a lightweight yes/no verdict per person per recipe (to actually
+narrow the list down), plus somewhere to leave a short comment
+alongside a vote, and a separate freeform message-board thread at the
+bottom of the board for the open-ended back-and-forth a family
+actually has while arguing about a list.
+
+Built as four new tables in `recipes.db`, following patterns already
+established elsewhere rather than inventing new ones: `boards` (name,
+who started it, when); `board_recipes`, a plain many-to-many join
+table the same shape as `recipe_relations`, holding nothing but the
+link itself — deliberately, so the undestructible-recipe requirement
+above holds structurally, not just by convention; `board_recipe_votes`,
+one row per `(board, recipe, person)` with a `vote` and an optional
+`comment`, upserted on `UNIQUE(board_id, recipe_id, user_email)` the
+same way `recipe_reviews`/`upsert_review()` already works; and
+`board_comments`, append-only and attributed, the same shape as
+`site_feedback` — no editing or deleting your own comment once posted,
+same reasoning as feedback.
+
+A new `require_known_user()` dependency (alongside the existing
+`require_admin()`) gates every board-writing route: not admin-only,
+but still failing loudly with a clear 400 if `current_user_email()`
+can't identify who's asking, the same choice `submit_feedback()`/
+`submit_review()` already make, so a board, a link, a vote, or a
+comment is never silently saved with no idea who it's from.
+
+Routes: `GET`/`POST /boards` (list boards / start one), `GET
+/boards/{id}` (the board itself — every recipe on it, each with its
+per-person votes and a vote-and-comment form for whoever's looking at
+it, plus the comment thread), `POST /recipes/{id}/board` (the actual
+"add to board" control, living on the recipe's own page as Tony's
+original use case asked for — either an existing board from a
+dropdown or a brand-new one typed into a box beside it, created on the
+fly), `DELETE /boards/{board_id}/recipes/{recipe_id}` (remove — htmx,
+same Reject/Delete button pattern used elsewhere), `POST
+/boards/{board_id}/recipes/{recipe_id}/vote`, and `POST
+/boards/{board_id}/comments`.
+
+`_delete_recipe_row()` was extended to also clean up a deleted
+recipe's `board_recipes`/`board_recipe_votes` rows — never
+`board_comments`, which belongs to the board, not any one recipe on
+it — the same "single path, no orphaned state" discipline documented
+in "The delete_recipe fix that wasn't" below. `check_no_orphaned_
+foreign_keys` in `site_checks.py` gained the equivalent orphan checks
+for all three board tables, and two new route-exercising checks
+(`check_boards_crud_workflow`, `check_delete_recipe_cleans_up_board_
+rows`) each build their own throwaway board/recipe/vote/comment
+fixture and clean up every trace in a `finally` block: the first walks
+the whole lifecycle end to end (create a board, add a recipe to it,
+vote with a comment, post a board comment, remove the recipe) and
+confirms removing a recipe from a board never touches the recipe row
+or the board's own comment thread; the second confirms the reverse —
+deleting the recipe itself cleans up its board links and votes while
+leaving the board and its unrelated comments alone. Full CI suite (16
+checks, including the 2 new ones) run in an isolated `HOME`/venv —
+16/16 passed.
+
+Seven templates (`authors.html`, `feedback.html`, `feedback_inbox.html`,
+`home.html`, `qc_issues.html`, `review.html`, `unit_tests.html`) each
+got a new "📌 Boards" link in their copy-pasted `.site-nav` block (see
+"Outer-loop unit tests" above on why there's no shared base template to
+edit just once); CSS cache-busting bumped `?v=6` → `?v=7` across all
+thirteen templates that load `style.css`, same as every previous CSS
+change.
+
+Deliberately out of scope for this first pass, matching Tony's own
+"ship small, see how it behaves" approach to the per-recipe-PDF feature
+above: no way to delete a whole board once created (only to empty it
+out recipe by recipe); no per-board privacy or membership — every
+board is visible to, and editable by, anyone who reaches the site,
+same as everything else here; and no way to add a recipe to a board
+directly from the board's own page — for now, adding only happens from
+a recipe's own page, which is exactly the workflow Tony actually asked
+for.
+
 ---
 
 *Still on the list, deliberately deferred: Tier 2 (the LLM-based semantic
 double-check of a recipe against its original PDF chunk); a batch
 backfill for derived page PDFs on already-approved recipes;
 `remove_book_recipes.py` cleaning up derived page PDFs for the recipes
-it bulk-deletes; and confirming the recipe-app systemd service and the
+it bulk-deletes; confirming the recipe-app systemd service and the
 Juniper13 mount survive a real reboot together (`RequiresMountsFor` is
-untested so far).*
+untested so far); deleting a whole board once created (only emptying
+it out recipe by recipe is possible today); and adding a recipe to a
+board directly from the board's own page rather than only from the
+recipe's page.*
