@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>{{ board["name"] }} - Boards - My Recipes</title>
+    <link rel="stylesheet" href="/static/style.css?v=8">
+    <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+</head>
+<body>
+    <div class="container">
+        <a class="back-link" href="/boards">&larr; Back to all boards</a>
+        <div class="recipe-header">
+            <h1>{{ board["name"] }}</h1>
+            <p class="source">
+                {% if board["created_by"] %}Started by {{ board["created_by"].split("@")[0]|capitalize }}{% endif %}
+                {% if board["created_at"] %} &middot; {{ board["created_at"][:10] }}{% endif %}
+            </p>
+        </div>
+
+        <ul class="board-recipe-list">
+            {% for r in recipes %}
+            <li>
+                <div class="board-recipe-row">
+                    <div class="recipe-info">
+                        <a href="/recipes/{{ r['id'] }}">{{ r["title"] | titlecase }}</a>
+                        <span class="source">{{ r["source_book"] }} &middot; &#10003; {{ r["yes_count"] }} &middot; &#10007; {{ r["no_count"] }}</span>
+                    </div>
+
+                    {% if user_email %}
+                    {% set my_vote = r["votes"] | selectattr("user_email", "equalto", user_email) | first %}
+                    <div class="board-vote-controls">
+                        <form method="post" action="/boards/{{ board['id'] }}/recipes/{{ r['id'] }}/vote" class="vote-buttons">
+                            <input type="hidden" name="comment" value="{{ my_vote['comment'] if my_vote and my_vote['comment'] else '' }}">
+                            <button type="submit" name="vote" value="yes"
+                                    class="vote-icon-btn vote-yes-btn {% if my_vote and my_vote['vote'] == 'yes' %}active{% endif %}"
+                                    title="Vote yes" aria-label="Vote yes">&#10003;</button>
+                            <button type="submit" name="vote" value="no"
+                                    class="vote-icon-btn vote-no-btn {% if my_vote and my_vote['vote'] == 'no' %}active{% endif %}"
+                                    title="Vote no" aria-label="Vote no">&#10007;</button>
+                        </form>
+                        <details class="comment-details" {% if my_vote and my_vote["comment"] %}open{% endif %}>
+                            <summary class="comment-toggle-btn">&#128172; Comment</summary>
+                            <form method="post" action="/boards/{{ board['id'] }}/recipes/{{ r['id'] }}/vote" class="comment-form">
+                                <input type="hidden" name="vote" value="{{ my_vote['vote'] if my_vote and my_vote['vote'] else '' }}">
+                                <input type="text" name="comment" placeholder="Any thoughts on this one?"
+                                       value="{{ my_vote['comment'] if my_vote and my_vote['comment'] else '' }}">
+                                <button type="submit">Save</button>
+                            </form>
+                        </details>
+                    </div>
+                    {% endif %}
+                </div>
+
+                {% if r["votes"] %}
+                <ul class="board-vote-list">
+                    {% for v in r["votes"] %}
+                    <li>
+                        <strong>{{ v["user_email"].split("@")[0]|capitalize }}</strong>
+                        {% if v["vote"] == "yes" %}&#10003; yes{% elif v["vote"] == "no" %}&#10007; no{% else %}no vote yet{% endif %}
+                        {% if v["comment"] %}<p>{{ v["comment"] }}</p>{% endif %}
+                    </li>
+                    {% endfor %}
+                </ul>
+                {% endif %}
+
+                {% if user_email %}
+                <button
+                    class="delete-btn"
+                    hx-delete="/boards/{{ board['id'] }}/recipes/{{ r['id'] }}"
+                    hx-target="closest li"
+                    hx-swap="outerHTML"
+                    hx-confirm="Remove '{{ r['title'] | titlecase }}' from this board? (The recipe itself is never deleted.)">
+                    Remove from board
+                </button>
+                {% endif %}
+            </li>
+            {% else %}
+            <li class="empty-state">Nothing on this board yet -- add a recipe from its own page.</li>
+            {% endfor %}
+        </ul>
+
+        <div class="recipe-section">
+            <h2>Comments</h2>
+            {% if comments %}
+            <ul class="review-list">
+                {% for c in comments %}
+                <li>
+                    <strong>{{ c["user_email"].split("@")[0]|capitalize if c["user_email"] else "Someone" }}</strong>
+                    <span class="source">{{ c["created_at"][:16] }} UTC</span>
+                    <p>{{ c["message"] }}</p>
+                </li>
+                {% endfor %}
+            </ul>
+            {% else %}
+            <p class="muted">No comments yet.</p>
+            {% endif %}
+
+            {% if user_email %}
+            <form method="post" action="/boards/{{ board['id'] }}/comments">
+                <label>Add a comment for the group
+                    <textarea name="message" rows="3" required placeholder="What do we think?"></textarea>
+                </label>
+                <button type="submit">Post comment</button>
+            </form>
+            {% else %}
+            <p class="muted">Couldn't identify you -- comments need to come through Cloudflare Access.</p>
+            {% endif %}
+        </div>
+    </div>
+</body>
+</html>

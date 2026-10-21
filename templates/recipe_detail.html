@@ -2,7 +2,7 @@
 <html>
 <head>
     <title>{{ recipe["title"] | titlecase }}</title>
-    <link rel="stylesheet" href="/static/style.css?v=6">
+    <link rel="stylesheet" href="/static/style.css?v=8">
     <script src="https://unpkg.com/htmx.org@1.9.12"></script>
 </head>
 <body>
@@ -154,6 +154,34 @@
             {% endif %}
         </div>
         {% endif %}
+
+        <div class="recipe-section">
+            <h2>Add to a board</h2>
+            {% if user_email %}
+            <form method="post" action="/recipes/{{ recipe['id'] }}/board">
+                <label>Existing board
+                    <select name="board_id" class="board-select">
+                        <option value="">&mdash; choose a board &mdash;</option>
+                        {% for b in boards %}
+                        <option value="{{ b['id'] }}">{{ b["name"] }}</option>
+                        {% endfor %}
+                    </select>
+                </label>
+                <label>Or start a new board
+                    <input type="text" name="new_board_name" placeholder="e.g. Christmas Ideas">
+                </label>
+                <button type="submit">Add</button>
+            </form>
+            {% else %}
+            <p class="muted">Couldn't identify you -- boards need to come through Cloudflare Access.</p>
+            {% endif %}
+
+            {% if recipe_boards %}
+            <p class="review-summary">On:
+                {% for b in recipe_boards %}<a href="/boards/{{ b['id'] }}">{{ b["name"] }}</a>{% if not loop.last %}, {% endif %}{% endfor %}
+            </p>
+            {% endif %}
+        </div>
 
         <div class="recipe-section">
             <h2>Made it? Rate it.</h2>

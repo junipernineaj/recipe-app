@@ -778,6 +778,124 @@ directly from the board's own page — for now, adding only happens from
 a recipe's own page, which is exactly the workflow Tony actually asked
 for.
 
+## 2026-10-21 — Automatic restart on deploy, via a git post-merge hook
+
+Moving the app to a systemd service (above) traded away `--reload`:
+Python code changes now need the process restarted to take effect,
+and Tony was doing that by hand after every `git pull` — easy to
+forget, and the failure mode isn't a crash, it's the server quietly
+serving the *old* code with no error at all.
+
+Asked whether the restart could happen automatically on deploy, or
+whether a manual `sudo systemctl restart recipe-app` after every pull
+was just how this works now. Offered three shapes: tie it to
+`git pull` itself via a git hook (restarts exactly when there's
+something new to restart for, no extra command to remember); a
+one-line `deploy.sh` wrapper to run instead of a bare `git pull`
+(simplest, no sudoers changes at all); or a systemd `.path` unit
+watching the whole repo directory for any file-level change, including
+a hand-edit made directly on the server, not just a `git pull` —
+closer to reintroducing file-watching in production, which the move to
+a systemd service had specifically moved away from. Tony picked the
+git-hook option.
+
+Added `githooks/post-merge`, tracked in the repo (not
+`.git/hooks/post-merge`, which git doesn't version at all), and wired
+it up with `git config core.hooksPath githooks` — a one-time,
+repo-local config change, not something a commit can carry on its
+own, so it needs setting again on any future clone. Git only invokes
+a `post-merge` hook when an actual merge happens (a fast-forward
+counts), never on a no-op "Already up to date" pull, so this can't
+fire needlessly on an empty `git pull` — verified directly rather than
+assumed, since getting this wrong either way (firing on nothing, or
+never firing at all) would have been easy to miss just by reading the
+git docs.
+
+Restarting needs root, and a hook running non-interactively can't sit
+there waiting on a sudo password prompt, so this also needed a
+narrowly-scoped sudoers rule — `NOPASSWD` for exactly
+`systemctl restart recipe-app`, nothing else — added via `visudo`
+(never by hand-editing `/etc/sudoers`, which doesn't get its syntax
+checked before it's live). Documented as a one-time setup step
+alongside `core.hooksPath` in `RUNBOOK.md` → "Restarting after a
+deploy", rather than something a hand-off script does on Tony's
+behalf: a sudoers change is exactly the kind of thing that deserves a
+human actually reading it before it takes effect, not a file a script
+silently writes for him.
+
+The hook restarts unconditionally on every merge, deliberately not
+checking which files actually changed — a few seconds of restart blip
+on a single-worker home server, against the risk of a smarter check
+missing a case and leaving stale Python code silently live. Templates
+and `static/style.css` don't actually need this at all: Jinja2's
+`auto_reload` (the library default, never overridden here) re-checks a
+template's mtime on every render, and `StaticFiles` always reads
+straight from disk — only `main.py`/`site_checks.py`/`pipeline/*.py`
+changes actually require the process to restart, but the hook doesn't
+try to special-case that either, for the same reason.
+
+## 2026-10-21 — A less overpowering vote UI on board pages
+
+Tony flagged that the per-recipe vote control on a board's page
+(`templates/board_detail.html`) was too heavy for what it does: a
+full-width "Your vote" dropdown, a "Comment (optional)" text box, and
+a "Save vote" button, stacked in their own bordered card below the
+recipe rather than sitting beside it. Asked for the vote itself to
+move to the right of the recipe, the dropdown replaced with a small
+green check / red cross, and a comment control alongside them — all on
+one line.
+
+The two vote buttons are plain `<button type="submit" name="vote"
+value="yes">`/`value="no">` inside one `<form>`, so clicking either one
+posts immediately — no separate Save step. A hidden `comment` field in
+that same form carries the existing comment along unchanged, so voting
+yes or no never clears whatever was already written. The comment box
+itself is a native `<details>`/`<summary>` disclosure (`&#128172;
+Comment` as the summary) holding a second small form with its own
+hidden `vote` field, so editing just the comment never touches the
+stored vote either — it opens itself on page load when a comment's
+already saved, so an existing one is never hidden behind an extra
+click. None of this needed a backend change: `POST /boards/{board_id}/
+recipes/{recipe_id}/vote` already accepted `vote` and `comment`
+together exactly as it did before, so both forms just call the one
+existing route with whichever field actually changed.
+
+Styling the small round yes/no buttons ran straight into the CSS
+specificity quirk already documented above (search this file for
+"form button\[type=submit\]"): a lone `.vote-icon-btn` class loses to
+the site's default olive submit-button rule once the button is nested
+inside a `<form>`, the same way `.review-banner button.delete-btn`
+already has to work around it. Scoped the new rules under
+`.board-vote-controls` (two classes' worth of specificity) rather than
+"fixing" the underlying quirk, same call made the first time it came
+up. CSS cache-busting bumped `?v=7` → `?v=8` across all thirteen
+templates that load `style.css`, same as every previous CSS change.
+
+Verified with the full CI suite (16/16, including the two
+Boards-specific checks, which exercise the vote route directly and
+don't touch the template at all) re-run after the change, and — since
+this one's entirely about how it looks and behaves in a browser,
+which CI can't see — an actual render via headless Chromium
+(Playwright, already set up in this environment) at both a desktop and
+a narrow mobile width, against a seeded fixture board with mixed vote
+states (an active yes with a comment, a no vote, and no vote at all),
+plus a real click-through: casting a fresh vote in the browser and
+confirming the yes/no counts, the active button state, and the
+per-person vote list all updated correctly on reload.
+
+While in here, noticed `documentation/PROJECT_HISTORY.md` was missing
+its own "Automatic restart on deploy" entry (the one directly above
+this one) even though `RUNBOOK.md` and `githooks/post-merge` both made
+it in and are live on the server. That hand-off script's `replace_
+whole_file` safety check — refuse to touch a file that doesn't match
+its own expected starting content, rather than overwrite something
+unexpected — had correctly declined to touch this file, since the
+Boards feature's own (still-uncommitted, at the time) edit to it was
+already on disk and didn't match what the restart-hook script expected
+to find. Nothing was lost or silently clobbered, but the entry itself
+genuinely never got written. Backfilled above, in its correct
+chronological place, rather than leaving the gap.
+
 ---
 
 *Still on the list, deliberately deferred: Tier 2 (the LLM-based semantic

@@ -504,3 +504,131 @@ form button[type="submit"]:hover { background: #626c40; }
 .feedback-status-new { background: #f3d9a4; color: #6b4a00; }
 .feedback-status-done { background: #b8d4c8; color: #1f4a3a; }
 .feedback-status-dismissed { background: var(--border); color: var(--brown-mid); }
+
+/* Boards -- /boards and /boards/{id} (templates/boards.html,
+   templates/board_detail.html), plus the "Add to a board" section on
+   templates/recipe_detail.html. */
+.board-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.9rem; }
+.board-list li {
+    background: var(--cream-card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1rem 1.1rem;
+    box-shadow: var(--shadow);
+}
+.board-list li.empty-state {
+    background: none;
+    border: none;
+    box-shadow: none;
+    text-align: center;
+    color: var(--brown-mid);
+    padding: 2rem 0;
+}
+
+.board-recipe-list { list-style: none; margin: 0; padding: 0; }
+.board-recipe-list > li { padding: 1rem 0; border-bottom: 1px dashed var(--border); }
+.board-recipe-list > li:last-child { border-bottom: none; }
+.board-recipe-list li.empty-state { text-align: center; color: var(--brown-mid); padding: 2rem 0; }
+
+/* The recipe title/source on the left, the yes/no vote and the
+   comment toggle on the right, all on one line where there's room --
+   wrapping underneath on narrow screens rather than a dedicated media
+   query, same as #recipe-list li does. */
+.board-recipe-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1rem;
+    flex-wrap: wrap;
+}
+
+.board-vote-controls { display: flex; align-items: center; gap: 0.5rem; flex-shrink: 0; }
+
+/* These two forms sit inline next to the recipe title, so they drop
+   the default card look (background/border/padding/box-shadow) every
+   other <form> on the site gets -- a single class selector is enough
+   to win over the bare `form` rule down below. */
+.board-vote-controls .vote-buttons,
+.board-vote-controls .comment-form {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    background: none;
+    border: none;
+    padding: 0;
+    box-shadow: none;
+}
+
+/* Small round yes/no buttons rather than the "Your vote" dropdown +
+   Save button this replaces. Nested inside a <form>, a lone class
+   selector loses to the site's default "form button[type=submit]"
+   olive-green button (see the comment above .review-banner button.
+   delete-btn) -- .board-vote-controls .vote-icon-btn carries two
+   classes' worth of specificity, which is enough to win. */
+.board-vote-controls .vote-icon-btn {
+    width: 2.1rem;
+    height: 2.1rem;
+    padding: 0;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: #fff;
+    color: var(--brown-mid);
+    font-size: 1.05rem;
+    line-height: 1;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.15s ease;
+}
+.board-vote-controls .vote-yes-btn:hover,
+.board-vote-controls .vote-yes-btn.active { background: var(--olive); border-color: var(--olive); color: #fff; }
+.board-vote-controls .vote-no-btn:hover,
+.board-vote-controls .vote-no-btn.active { background: var(--terracotta); border-color: var(--terracotta); color: #fff; }
+
+/* <summary> is the "Add comment" button -- a native disclosure toggle
+   rather than a Save-vote-sized button, so no JS is needed to show or
+   hide the comment box. Opens by itself on page load when a comment
+   is already saved (see the `open` attribute in board_detail.html),
+   so an existing comment is never hidden behind an extra click. */
+.comment-details > summary.comment-toggle-btn {
+    list-style: none;
+    display: inline-block;
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--brown-mid);
+    padding: 0.4rem 0.7rem;
+    border-radius: 6px;
+    font-size: 0.85rem;
+    cursor: pointer;
+    white-space: nowrap;
+}
+.comment-details > summary.comment-toggle-btn::-webkit-details-marker { display: none; }
+.comment-details > summary.comment-toggle-btn::marker { content: ""; }
+.comment-details > summary.comment-toggle-btn:hover { background: var(--terracotta); border-color: var(--terracotta); color: #fff; }
+.comment-details[open] > summary.comment-toggle-btn { background: var(--olive); border-color: var(--olive); color: #fff; }
+
+.comment-details .comment-form { margin-top: 0.5rem; width: 100%; }
+.comment-details .comment-form input[type="text"] { flex: 1; margin-top: 0; }
+.comment-details .comment-form button[type="submit"] { padding: 0.5rem 0.9rem; font-size: 0.85rem; flex-shrink: 0; }
+
+@media (max-width: 480px) {
+    .board-recipe-row { align-items: flex-start; }
+    .comment-details { width: 100%; }
+}
+
+.board-vote-list { list-style: none; margin: 0.5rem 0 0; padding: 0; }
+.board-vote-list li { padding: 0.25rem 0; font-size: 0.85rem; color: var(--brown-mid); }
+.board-vote-list li p { margin: 0.15rem 0 0; color: var(--brown-dark); }
+
+.board-select {
+    width: 100%;
+    margin-top: 0.35rem;
+    padding: 0.55rem 0.75rem;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-family: inherit;
+    font-size: 0.95rem;
+    background: #fff;
+    color: var(--brown-dark);
+}

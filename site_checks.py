@@ -9,20 +9,23 @@ any time: from the command line, from a cron job, or from the
 
 The exceptions are check_delete_recipe_cleans_up_related_rows,
 check_clone_recipe_copies_correctly, check_edit_recipe_saves_source_page,
-check_generate_source_pdf_creates_extracted_file, and
-check_edit_recipe_regenerates_existing_source_pdf, which have to actually
-exercise their routes to mean anything (a purely read-only check can only
-notice orphaned rows -- or orphaned derived_pages/*.pdf files -- that
-already exist; that's exactly why check_no_orphaned_foreign_keys didn't
-catch either of the two times delete_recipe shipped broken; see
-PROJECT_HISTORY.md, "The delete_recipe fix that wasn't"). Each creates its
-own throwaway fixture recipe(s) (and, for the two PDF checks, a throwaway
-source PDF built here with PyMuPDF), tagged unmistakably as fixtures, and
-always deletes every trace of them itself in a finally block -- regardless
-of whether the check passes, fails, or raises -- so all five are still
-safe to run against production: worst case, one briefly creates and then
-removes a 'pending' recipe (or two) and a small PDF that was never visible
-on the site.
+check_generate_source_pdf_creates_extracted_file,
+check_edit_recipe_regenerates_existing_source_pdf,
+check_boards_crud_workflow, and check_delete_recipe_cleans_up_board_rows,
+which have to actually exercise their routes to mean anything (a purely
+read-only check can only notice orphaned rows -- or orphaned
+derived_pages/*.pdf files -- that already exist; that's exactly why
+check_no_orphaned_foreign_keys didn't catch either of the two times
+delete_recipe shipped broken; see PROJECT_HISTORY.md, "The delete_recipe
+fix that wasn't"). Each creates its own throwaway fixture recipe(s) (and,
+for the two PDF checks, a throwaway source PDF built here with PyMuPDF;
+for the two Boards checks, a throwaway board, vote, and comment too),
+tagged unmistakably as fixtures, and always deletes every trace of them
+itself in a finally block -- regardless of whether the check passes,
+fails, or raises -- so all seven are still safe to run against
+production: worst case, one briefly creates and then removes a 'pending'
+recipe (or two), a small PDF that was never visible on the site, or a
+fixture board that was never visible on /boards.
 
 Usage:
     python3 site_checks.py            # run once, print every result, save it
@@ -170,6 +173,11 @@ def check_no_orphaned_foreign_keys(client):
         ("recipe_relations.related_recipe_id", "SELECT COUNT(*) FROM recipe_relations WHERE related_recipe_id NOT IN (SELECT id FROM recipes)"),
         ("recipe_reviews.recipe_id", "SELECT COUNT(*) FROM recipe_reviews WHERE recipe_id NOT IN (SELECT id FROM recipes)"),
         ("recipe_qc_results.recipe_id", "SELECT COUNT(*) FROM recipe_qc_results WHERE recipe_id NOT IN (SELECT id FROM recipes)"),
+        ("board_recipes.recipe_id", "SELECT COUNT(*) FROM board_recipes WHERE recipe_id NOT IN (SELECT id FROM recipes)"),
+        ("board_recipes.board_id", "SELECT COUNT(*) FROM board_recipes WHERE board_id NOT IN (SELECT id FROM boards)"),
+        ("board_recipe_votes.recipe_id", "SELECT COUNT(*) FROM board_recipe_votes WHERE recipe_id NOT IN (SELECT id FROM recipes)"),
+        ("board_recipe_votes.board_id", "SELECT COUNT(*) FROM board_recipe_votes WHERE board_id NOT IN (SELECT id FROM boards)"),
+        ("board_comments.board_id", "SELECT COUNT(*) FROM board_comments WHERE board_id NOT IN (SELECT id FROM boards)"),
     ]:
         try:
             count = conn.execute(sql).fetchone()[0]
@@ -650,6 +658,228 @@ def check_edit_recipe_regenerates_existing_source_pdf(client):
         conn.close()
 
 
+def check_boards_crud_workflow(client):
+    """Exercises the real Boards routes end to end: create a board (POST
+    /boards), add a fixture recipe to it from the recipe's own page (POST
+    /recipes/{id}/board, both the "existing board" path and the "type a
+    new board name" path), cast a vote with a comment (POST
+    /boards/{board}/recipes/{recipe}/vote), post a board-level comment
+    (POST /boards/{board}/comments), then remove the recipe from the
+    board (DELETE /boards/{board}/recipes/{recipe}) and confirm it's
+    gone from the board's own page while the recipe itself and the
+    board's comment thread are both untouched.
+
+    Reuses the same admin identity _admin_headers() already provides as
+    the "known" board user -- boards aren't admin-gated (require_known_
+    user, not require_admin), but an admin email is still a perfectly
+    valid identified visitor, and this avoids needing a second env var
+    just for these checks.
+
+    Always deletes every trace of the fixture board and fixture recipe in
+    a finally block (board_comments, board_recipe_votes, board_recipes,
+    boards, then the recipe itself and its recipe_qc_results), so it's
+    safe to run against production."""
+    headers = _admin_headers()
+    if not headers:
+        return True, "skipped -- ADMIN_EMAILS isn't set in this environment"
+
+    marker = "__site_checks_boards_fixture__"
+    conn = sqlite3.connect("recipes.db")
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO recipes (title, source_book, source_path, ingredients, instructions, status) "
+        "VALUES (?, ?, 'fixture.pdf', 'ing', 'inst', 'approved')",
+        (marker, marker),
+    )
+    recipe_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+
+    board_id = None
+    try:
+        r = client.post("/boards", headers=headers, data={"name": marker}, follow_redirects=False)
+        if r.status_code != 303:
+            return False, f"POST /boards returned {r.status_code}, expected 303"
+        location = r.headers.get("location", "")
+        parts = location.strip("/").split("/")
+        if len(parts) != 2 or parts[0] != "boards" or not parts[1].isdigit():
+            return False, f"creating a board redirected to {location!r}, expected /boards/<id>"
+        board_id = int(parts[1])
+
+        r = client.post(
+            f"/recipes/{recipe_id}/board", headers=headers,
+            data={"board_id": str(board_id)}, follow_redirects=False,
+        )
+        if r.status_code != 303:
+            return False, f"POST /recipes/{recipe_id}/board (existing board) returned {r.status_code}, expected 303"
+
+        conn = sqlite3.connect("recipes.db")
+        on_board = conn.execute(
+            "SELECT 1 FROM board_recipes WHERE board_id = ? AND recipe_id = ?", (board_id, recipe_id)
+        ).fetchone()
+        conn.close()
+        if not on_board:
+            return False, "adding a recipe to an existing board didn't create a board_recipes row"
+
+        r = client.post(
+            f"/boards/{board_id}/recipes/{recipe_id}/vote", headers=headers,
+            data={"vote": "yes", "comment": "Looks good for the list"}, follow_redirects=False,
+        )
+        if r.status_code != 303:
+            return False, f"POST .../vote returned {r.status_code}, expected 303"
+
+        r = client.post(
+            f"/boards/{board_id}/comments", headers=headers,
+            data={"message": "Let's make this one"}, follow_redirects=False,
+        )
+        if r.status_code != 303:
+            return False, f"POST /boards/{board_id}/comments returned {r.status_code}, expected 303"
+
+        detail = client.get(f"/boards/{board_id}", headers=headers)
+        if detail.status_code != 200:
+            return False, f"GET /boards/{board_id} returned {detail.status_code}, expected 200"
+        # Jinja2 autoescapes template output, so a comment with an
+        # apostrophe (like "Let's make this one") renders as
+        # "Let&#39;s make this one" -- compare against the escaped form,
+        # same reasoning as check_authors_page_lists_every_book above.
+        problems = []
+        if "Looks good for the list" not in detail.text:
+            problems.append("vote comment missing from the board page")
+        if str(_html_escape("Let's make this one")) not in detail.text:
+            problems.append("board comment missing from the board page")
+        if problems:
+            return False, "; ".join(problems)
+
+        r = client.delete(f"/boards/{board_id}/recipes/{recipe_id}", headers=headers)
+        if r.status_code != 200:
+            return False, f"DELETE /boards/{board_id}/recipes/{recipe_id} returned {r.status_code}, expected 200"
+
+        conn = sqlite3.connect("recipes.db")
+        still_linked = conn.execute(
+            "SELECT 1 FROM board_recipes WHERE board_id = ? AND recipe_id = ?", (board_id, recipe_id)
+        ).fetchone()
+        still_voted = conn.execute(
+            "SELECT 1 FROM board_recipe_votes WHERE board_id = ? AND recipe_id = ?", (board_id, recipe_id)
+        ).fetchone()
+        recipe_still_exists = conn.execute("SELECT 1 FROM recipes WHERE id = ?", (recipe_id,)).fetchone()
+        comment_still_there = conn.execute(
+            "SELECT 1 FROM board_comments WHERE board_id = ? AND message = ?", (board_id, "Let's make this one")
+        ).fetchone()
+        conn.close()
+
+        if still_linked:
+            return False, "board_recipes row still present after removing the recipe from the board"
+        if still_voted:
+            return False, "board_recipe_votes row still present after removing the recipe from the board"
+        if not recipe_still_exists:
+            return False, "removing a recipe from a board deleted the recipe itself -- this must never happen"
+        if not comment_still_there:
+            return False, "removing a recipe from a board deleted the board's own comment thread -- this must never happen"
+        return True, None
+    finally:
+        conn = sqlite3.connect("recipes.db")
+        cursor = conn.cursor()
+        if board_id is not None:
+            cursor.execute("DELETE FROM board_comments WHERE board_id = ?", (board_id,))
+            cursor.execute("DELETE FROM board_recipe_votes WHERE board_id = ?", (board_id,))
+            cursor.execute("DELETE FROM board_recipes WHERE board_id = ?", (board_id,))
+            cursor.execute("DELETE FROM boards WHERE id = ?", (board_id,))
+        cursor.execute("DELETE FROM recipe_qc_results WHERE recipe_id = ?", (recipe_id,))
+        cursor.execute("DELETE FROM recipes WHERE id = ?", (recipe_id,))
+        conn.commit()
+        conn.close()
+
+
+def check_delete_recipe_cleans_up_board_rows(client):
+    """_delete_recipe_row() (the single code path for deleting a recipe --
+    see its own docstring in main.py) was extended to also remove
+    board_recipes/board_recipe_votes rows for a deleted recipe, the same
+    "no orphaned rows" discipline it already enforces for recipe_reviews/
+    recipe_qc_results/recipe_relations (see check_delete_recipe_cleans_up_
+    related_rows above, including why a check that only inspects the
+    aftermath can't catch a regression here). This creates a fixture
+    board with the fixture recipe on it, voted on and added by the same
+    fixture email, deletes the recipe through the real DELETE /recipes/
+    {id} route, and confirms both board tables lost their rows for that
+    recipe while the board itself (and a comment on it, unrelated to any
+    one recipe) are left alone.
+
+    Always deletes every trace of the fixture board and recipe in a
+    finally block, so it's safe to run against production."""
+    headers = _admin_headers()
+    if not headers:
+        return True, "skipped -- ADMIN_EMAILS isn't set in this environment"
+
+    marker = "__site_checks_board_delete_cleanup_fixture__"
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds") + "Z"
+
+    conn = sqlite3.connect("recipes.db")
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO recipes (title, source_book, source_path, ingredients, instructions, status) "
+        "VALUES (?, ?, 'fixture.pdf', 'ing', 'inst', 'pending')",
+        (marker, marker),
+    )
+    recipe_id = cursor.lastrowid
+    cursor.execute(
+        "INSERT INTO boards (name, created_by, created_at) VALUES (?, 'site-checks-fixture@example.com', ?)",
+        (marker, now),
+    )
+    board_id = cursor.lastrowid
+    cursor.execute(
+        "INSERT INTO board_recipes (board_id, recipe_id, added_by, added_at) VALUES (?, ?, 'site-checks-fixture@example.com', ?)",
+        (board_id, recipe_id, now),
+    )
+    cursor.execute(
+        "INSERT INTO board_recipe_votes (board_id, recipe_id, user_email, vote, comment, updated_at) "
+        "VALUES (?, ?, 'site-checks-fixture@example.com', 'yes', 'fixture vote', ?)",
+        (board_id, recipe_id, now),
+    )
+    cursor.execute(
+        "INSERT INTO board_comments (board_id, user_email, message, created_at) "
+        "VALUES (?, 'site-checks-fixture@example.com', 'unrelated board comment', ?)",
+        (board_id, now),
+    )
+    conn.commit()
+    conn.close()
+
+    try:
+        r = client.delete(f"/recipes/{recipe_id}", headers=headers)
+        if r.status_code != 200:
+            return False, f"DELETE /recipes/{recipe_id} returned {r.status_code}, expected 200"
+
+        conn = sqlite3.connect("recipes.db")
+        leftovers = []
+        if conn.execute("SELECT 1 FROM board_recipes WHERE recipe_id = ?", (recipe_id,)).fetchone():
+            leftovers.append("board_recipes")
+        if conn.execute("SELECT 1 FROM board_recipe_votes WHERE recipe_id = ?", (recipe_id,)).fetchone():
+            leftovers.append("board_recipe_votes")
+        board_still_exists = conn.execute("SELECT 1 FROM boards WHERE id = ?", (board_id,)).fetchone()
+        comment_still_there = conn.execute(
+            "SELECT 1 FROM board_comments WHERE board_id = ?", (board_id,)
+        ).fetchone()
+        conn.close()
+
+        if leftovers:
+            return False, "deleting a recipe left rows behind in: " + ", ".join(leftovers)
+        if not board_still_exists:
+            return False, "deleting a recipe on a board deleted the board itself -- this must never happen"
+        if not comment_still_there:
+            return False, "deleting a recipe on a board deleted the board's own comment thread -- this must never happen"
+        return True, None
+    finally:
+        conn = sqlite3.connect("recipes.db")
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM board_comments WHERE board_id = ?", (board_id,))
+        cursor.execute("DELETE FROM board_recipe_votes WHERE board_id = ? OR recipe_id = ?", (board_id, recipe_id))
+        cursor.execute("DELETE FROM board_recipes WHERE board_id = ? OR recipe_id = ?", (board_id, recipe_id))
+        cursor.execute("DELETE FROM boards WHERE id = ?", (board_id,))
+        cursor.execute("DELETE FROM recipe_qc_results WHERE recipe_id = ?", (recipe_id,))
+        cursor.execute("DELETE FROM recipes WHERE id = ?", (recipe_id,))
+        conn.commit()
+        conn.close()
+
+
 def check_qc_backfill_up_to_date(client):
     """Catches the exact "QC: 2/5" confusion from before the score was
     broadened -- a recipe checked before a new rule was added shows fewer
@@ -727,6 +957,8 @@ CHECKS = [
     ("edit_recipe_saves_source_page", check_edit_recipe_saves_source_page),
     ("generate_source_pdf_creates_extracted_file", check_generate_source_pdf_creates_extracted_file),
     ("edit_recipe_regenerates_existing_source_pdf", check_edit_recipe_regenerates_existing_source_pdf),
+    ("boards_crud_workflow", check_boards_crud_workflow),
+    ("delete_recipe_cleans_up_board_rows", check_delete_recipe_cleans_up_board_rows),
     ("qc_backfill_up_to_date", check_qc_backfill_up_to_date),
     ("home_page_counts_match_database", check_home_page_counts_match_database),
     ("authors_page_lists_every_book", check_authors_page_lists_every_book),

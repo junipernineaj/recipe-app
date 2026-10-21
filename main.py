@@ -79,15 +79,12 @@ INVENTORY_DB_PATH = os.path.expanduser("~/cookbook-project/inventory.sqlite")
 
 # Cloudflare Access already authenticates every visitor (email allowlist +
 # one-time-pin login) before a request ever reaches this app, and it passes
-# the verified email through in this header. Trusting it isn't an absolute
-# guarantee here: uvicorn binds to 0.0.0.0, not 127.0.0.1 (deliberate --
-# see documentation/ARCHITECTURE.md "Admin access control" for why), so the
-# app is also reachable directly on the home LAN, not only through the
-# Cloudflare Tunnel. A device on the LAN that specifically crafts this
-# header itself could pose as an admin; ordinary browsing from a LAN device
-# does not (browsers don't send this header on their own). Accepted as-is
-# for this home network -- see ARCHITECTURE.md for the full reasoning and
-# the fix if that risk profile ever changes. ADMIN_EMAILS is read from the
+# the verified email through in this header. That trust depends on nothing
+# else being able to reach this app directly and set the same header itself
+# -- true since 2026-10-16, when the app moved to running as a systemd
+# service bound to 127.0.0.1 rather than 0.0.0.0 (see
+# documentation/ARCHITECTURE.md, "Admin access control", "Fixed 2026-10-16"
+# for the LAN-spoofing risk that closed). ADMIN_EMAILS is read from the
 # environment (not hardcoded) since this repo is public -- set it wherever
 # you start the app, e.g.:
 #   export ADMIN_EMAILS="you@example.com"
@@ -108,6 +105,21 @@ def is_admin(request: Request) -> bool:
 def require_admin(request: Request):
     if not is_admin(request):
         raise HTTPException(status_code=403, detail="Admins only")
+
+
+def require_known_user(request: Request):
+    """Boards (see init_boards_table() below) are open to anyone who
+    reaches the site through Cloudflare Access -- not admin-gated like
+    require_admin -- but every board action still needs to know WHO did
+    it, so this fails loudly with a clear 400 rather than letting an
+    unidentified request create an unattributed board, recipe link, vote,
+    or comment. Same "fail loudly" choice submit_feedback() and
+    submit_review() already make, for the same reason."""
+    if not current_user_email(request):
+        raise HTTPException(
+            status_code=400,
+            detail="Couldn't identify who you are -- are you accessing this through Cloudflare Access?",
+        )
 
 
 def current_user_email(request: Request) -> str | None:
@@ -246,6 +258,108 @@ def init_feedback_table():
 
 
 init_feedback_table()
+
+
+def init_boards_table():
+    """Shared 'boards' a family or group of visitors build together --
+    born from an actual Christmas-list use case: pull candidate recipes
+    into one place, then argue about them. Anyone who reaches the site
+    through Cloudflare Access can create one and add or remove recipes
+    from it (see current_user_email()'s docstring on the trust model --
+    same idea, no separate login of our own); there's no per-board
+    membership or privacy control, same as every other page here.
+    created_by is for display only ("Started by ...") and never gates
+    anything, same spirit as current_user_email() itself."""
+    conn = sqlite3.connect("recipes.db")
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS boards (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            created_by TEXT,
+            created_at TEXT NOT NULL
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+
+init_boards_table()
+
+
+def init_board_recipes_table():
+    """Which recipes are on which board -- a plain many-to-many join
+    table, same shape as recipe_relations. Deliberately holds nothing but
+    the link itself: votes and comments live in their own tables below,
+    so removing a recipe from a board (DELETE FROM board_recipes) never
+    has to touch the recipes table at all -- the one hard requirement for
+    this whole feature is that a board can never be the path by which a
+    recipe itself gets deleted (see _delete_recipe_row(), the single
+    function that's actually allowed to do that)."""
+    conn = sqlite3.connect("recipes.db")
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS board_recipes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            board_id INTEGER NOT NULL,
+            recipe_id INTEGER NOT NULL,
+            added_by TEXT,
+            added_at TEXT NOT NULL,
+            UNIQUE(board_id, recipe_id)
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+
+init_board_recipes_table()
+
+
+def init_board_recipe_votes_table():
+    """One row per (board, recipe, person) -- a yes/no verdict plus an
+    optional short comment, for refining a board down to a final list.
+    Same upsert-by-UNIQUE-constraint shape as recipe_reviews (see
+    upsert_review()); upsert_board_vote() below is the equivalent for
+    this table."""
+    conn = sqlite3.connect("recipes.db")
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS board_recipe_votes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            board_id INTEGER NOT NULL,
+            recipe_id INTEGER NOT NULL,
+            user_email TEXT NOT NULL,
+            vote TEXT,
+            comment TEXT,
+            updated_at TEXT NOT NULL,
+            UNIQUE(board_id, recipe_id, user_email)
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+
+init_board_recipe_votes_table()
+
+
+def init_board_comments_table():
+    """The freeform message-board thread at the bottom of a board's page
+    -- append-only and attributed, same shape and same no-edit-by-the-
+    author rule as site_feedback (see init_feedback_table()). Board-
+    level, not recipe-level, so deleting a recipe from a board (or
+    deleting the recipe itself) never touches this table."""
+    conn = sqlite3.connect("recipes.db")
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS board_comments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            board_id INTEGER NOT NULL,
+            user_email TEXT,
+            message TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+
+init_board_comments_table()
 
 
 def get_recipes_for_book(source_book, exclude_id=None):
@@ -1041,6 +1155,165 @@ def get_open_feedback_count():
     return count
 
 
+def get_boards():
+    """Every board, newest first, with how many recipes are on it -- for
+    the /boards index page."""
+    conn = sqlite3.connect("recipes.db")
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT b.id, b.name, b.created_by, b.created_at,
+               COUNT(br.id) AS recipe_count
+        FROM boards b
+        LEFT JOIN board_recipes br ON br.board_id = b.id
+        GROUP BY b.id
+        ORDER BY b.created_at DESC
+    """)
+    boards = cursor.fetchall()
+    conn.close()
+    return boards
+
+
+def get_board_by_id(board_id: int):
+    conn = sqlite3.connect("recipes.db")
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM boards WHERE id = ?", (board_id,))
+    board = cursor.fetchone()
+    conn.close()
+    return board
+
+
+def create_board(name: str, created_by: str | None) -> int:
+    conn = sqlite3.connect("recipes.db")
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO boards (name, created_by, created_at) VALUES (?, ?, datetime('now'))",
+        (name, created_by),
+    )
+    board_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    return board_id
+
+
+def add_recipe_to_board(board_id: int, recipe_id: int, added_by: str | None):
+    conn = sqlite3.connect("recipes.db")
+    conn.execute(
+        "INSERT OR IGNORE INTO board_recipes (board_id, recipe_id, added_by, added_at) "
+        "VALUES (?, ?, ?, datetime('now'))",
+        (board_id, recipe_id, added_by),
+    )
+    conn.commit()
+    conn.close()
+
+
+def remove_recipe_from_board(board_id: int, recipe_id: int):
+    """Removes a recipe from a board -- and that board's votes on it --
+    without ever touching the recipes table or any of the tables
+    _delete_recipe_row() owns. This is the one hard requirement for the
+    whole feature (see init_board_recipes_table()'s docstring): a board
+    can rearrange itself freely, but it can never be the reason a recipe
+    stops existing."""
+    conn = sqlite3.connect("recipes.db")
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM board_recipes WHERE board_id = ? AND recipe_id = ?", (board_id, recipe_id))
+    cursor.execute("DELETE FROM board_recipe_votes WHERE board_id = ? AND recipe_id = ?", (board_id, recipe_id))
+    conn.commit()
+    conn.close()
+
+
+def get_board_recipes(board_id: int):
+    """Every recipe on this board, each annotated with its own votes list
+    -- used by the board detail page to show, per recipe, who's said
+    yes, who's said no, and any comment that came with a vote."""
+    conn = sqlite3.connect("recipes.db")
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    recipes = cursor.execute("""
+        SELECT r.id, r.title, r.source_book, br.added_by, br.added_at
+        FROM board_recipes br
+        JOIN recipes r ON r.id = br.recipe_id
+        WHERE br.board_id = ?
+        ORDER BY br.added_at
+    """, (board_id,)).fetchall()
+    recipes = [dict(r) for r in recipes]
+    if not recipes:
+        conn.close()
+        return recipes
+    ids = [r["id"] for r in recipes]
+    placeholders = ",".join("?" * len(ids))
+    votes = cursor.execute(
+        f"SELECT recipe_id, user_email, vote, comment, updated_at FROM board_recipe_votes "
+        f"WHERE board_id = ? AND recipe_id IN ({placeholders}) ORDER BY updated_at",
+        [board_id] + ids,
+    ).fetchall()
+    conn.close()
+    by_recipe: dict = {}
+    for v in votes:
+        by_recipe.setdefault(v["recipe_id"], []).append(dict(v))
+    for r in recipes:
+        r["votes"] = by_recipe.get(r["id"], [])
+        r["yes_count"] = sum(1 for v in r["votes"] if v["vote"] == "yes")
+        r["no_count"] = sum(1 for v in r["votes"] if v["vote"] == "no")
+    return recipes
+
+
+def get_boards_for_recipe(recipe_id: int):
+    """Which boards a recipe is currently on -- shown on the recipe's own
+    page so "Add to a board" also doubles as "here's where this already
+    is"."""
+    conn = sqlite3.connect("recipes.db")
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT b.id, b.name FROM board_recipes br
+        JOIN boards b ON b.id = br.board_id
+        WHERE br.recipe_id = ?
+        ORDER BY b.name COLLATE NOCASE
+    """, (recipe_id,))
+    boards = cursor.fetchall()
+    conn.close()
+    return boards
+
+
+def upsert_board_vote(board_id: int, recipe_id: int, user_email: str, vote: str | None, comment: str | None):
+    conn = sqlite3.connect("recipes.db")
+    conn.execute("""
+        INSERT INTO board_recipe_votes (board_id, recipe_id, user_email, vote, comment, updated_at)
+        VALUES (?, ?, ?, ?, ?, datetime('now'))
+        ON CONFLICT(board_id, recipe_id, user_email) DO UPDATE SET
+            vote = excluded.vote,
+            comment = excluded.comment,
+            updated_at = excluded.updated_at
+    """, (board_id, recipe_id, user_email, vote, comment))
+    conn.commit()
+    conn.close()
+
+
+def get_board_comments(board_id: int):
+    conn = sqlite3.connect("recipes.db")
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT user_email, message, created_at FROM board_comments WHERE board_id = ? ORDER BY created_at",
+        (board_id,),
+    )
+    comments = cursor.fetchall()
+    conn.close()
+    return comments
+
+
+def add_board_comment(board_id: int, user_email: str | None, message: str):
+    conn = sqlite3.connect("recipes.db")
+    conn.execute(
+        "INSERT INTO board_comments (board_id, user_email, message, created_at) VALUES (?, ?, ?, datetime('now'))",
+        (board_id, user_email, message),
+    )
+    conn.commit()
+    conn.close()
+
+
 @app.get("/")
 def read_root(request: Request, book: str = ""):
     recipes = get_recipes(book_filter=book)
@@ -1340,6 +1613,8 @@ def recipe_detail(request: Request, recipe_id: int):
     qc_results = get_qc_results_for_recipe(recipe_id) if admin else []
     relations = get_recipe_relations(recipe_id)
     has_source_pdf = os.path.exists(_source_pdf_path(recipe_id))
+    boards = get_boards()
+    recipe_boards = get_boards_for_recipe(recipe_id)
 
     return templates.TemplateResponse(
         request=request,
@@ -1348,7 +1623,7 @@ def recipe_detail(request: Request, recipe_id: int):
             "recipe": recipe, "ingredients": ingredients, "instructions": instructions, "notes": notes, "is_admin": admin,
             "user_email": user_email, "reviews": reviews, "my_review": my_review,
             "made_it_count": made_it_count, "avg_rating": avg_rating, "qc_results": qc_results, "relations": relations,
-            "has_source_pdf": has_source_pdf,
+            "has_source_pdf": has_source_pdf, "boards": boards, "recipe_boards": recipe_boards,
         }
     )
 
@@ -1592,8 +1867,10 @@ def unapprove_recipe(recipe_id: int, _: None = Depends(require_admin)):
 
 def _delete_recipe_row(recipe_id: int):
     """The single code path for "delete a recipe" -- removes the row from
-    recipes plus every row in the other three recipes.db tables that
-    reference it (recipe_reviews, recipe_qc_results, recipe_relations).
+    recipes plus every row in the other recipes.db tables that reference
+    it (recipe_reviews, recipe_qc_results, recipe_relations, and, since
+    the Boards feature, board_recipes/board_recipe_votes -- never
+    board_comments, which is a board-level thread, not a per-recipe one).
     Used by both delete_recipe (the htmx Reject button on the review
     queue list) and reject_recipe (a plain-form Reject button on the
     recipe's own page, for a recipe that turns out not to be a recipe at
@@ -1606,6 +1883,8 @@ def _delete_recipe_row(recipe_id: int):
     cursor.execute("DELETE FROM recipe_reviews WHERE recipe_id = ?", (recipe_id,))
     cursor.execute("DELETE FROM recipe_qc_results WHERE recipe_id = ?", (recipe_id,))
     cursor.execute("DELETE FROM recipe_relations WHERE recipe_id = ? OR related_recipe_id = ?", (recipe_id, recipe_id))
+    cursor.execute("DELETE FROM board_recipes WHERE recipe_id = ?", (recipe_id,))
+    cursor.execute("DELETE FROM board_recipe_votes WHERE recipe_id = ?", (recipe_id,))
     cursor.execute("DELETE FROM recipes WHERE id = ?", (recipe_id,))
     conn.commit()
     conn.close()
@@ -1638,6 +1917,108 @@ def reject_recipe(recipe_id: int, _: None = Depends(require_admin)):
     redirect back to."""
     _delete_recipe_row(recipe_id)
     return RedirectResponse(url="/review", status_code=303)
+
+
+# --- Boards -----------------------------------------------------------
+# A shared space for pulling candidate recipes together for a project (the
+# motivating case: "Christmas Ideas") and refining the list as a group --
+# see documentation/PROJECT_HISTORY.md, "Boards: a shared place to collect
+# and refine recipes for a project" for the design discussion. Open to
+# anyone who reaches the site through Cloudflare Access, not admin-gated
+# (require_known_user, not require_admin) -- but recipes themselves are
+# completely undestructible via any board action; see
+# init_board_recipes_table()'s docstring and remove_recipe_from_board().
+
+@app.get("/boards")
+def boards_index(request: Request):
+    boards = get_boards()
+    return templates.TemplateResponse(
+        request=request, name="boards.html",
+        context={"boards": boards, "is_admin": is_admin(request)}
+    )
+
+
+@app.post("/boards")
+def create_board_route(request: Request, name: str = Form(...), _: None = Depends(require_known_user)):
+    name = name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Board name can't be empty")
+    board_id = create_board(name, current_user_email(request))
+    return RedirectResponse(url=f"/boards/{board_id}", status_code=303)
+
+
+@app.get("/boards/{board_id}")
+def board_detail(request: Request, board_id: int):
+    board = get_board_by_id(board_id)
+    if board is None:
+        return Response(status_code=404, content="Board not found")
+    recipes = get_board_recipes(board_id)
+    comments = get_board_comments(board_id)
+    return templates.TemplateResponse(
+        request=request, name="board_detail.html",
+        context={
+            "board": board, "recipes": recipes, "comments": comments,
+            "user_email": current_user_email(request), "is_admin": is_admin(request),
+        }
+    )
+
+
+@app.post("/recipes/{recipe_id}/board")
+def add_recipe_to_board_route(
+    request: Request, recipe_id: int,
+    board_id: str = Form(""), new_board_name: str = Form(""),
+    _: None = Depends(require_known_user),
+):
+    """Called from the "Add to a board" control on a recipe's own page --
+    either an existing board_id from the dropdown, or a brand new
+    new_board_name typed into the box beside it (created on the fly, the
+    same one-step convenience the original feature request asked for).
+    If both are somehow given, the new board wins, since typing a name is
+    a more explicit choice than whatever the dropdown happened to have
+    selected."""
+    recipe = get_recipe_by_id(recipe_id)
+    if recipe is None:
+        return Response(status_code=404, content="Recipe not found")
+    user_email = current_user_email(request)
+    new_board_name = new_board_name.strip()
+    if new_board_name:
+        target_board_id = create_board(new_board_name, user_email)
+    elif board_id.strip().isdigit():
+        target_board_id = int(board_id.strip())
+        if get_board_by_id(target_board_id) is None:
+            raise HTTPException(status_code=404, detail="That board no longer exists")
+    else:
+        raise HTTPException(status_code=400, detail="Pick a board, or type a name for a new one")
+    add_recipe_to_board(target_board_id, recipe_id, user_email)
+    return RedirectResponse(url=f"/recipes/{recipe_id}", status_code=303)
+
+
+@app.delete("/boards/{board_id}/recipes/{recipe_id}")
+def remove_recipe_from_board_route(board_id: int, recipe_id: int, _: None = Depends(require_known_user)):
+    remove_recipe_from_board(board_id, recipe_id)
+    return Response(status_code=200)
+
+
+@app.post("/boards/{board_id}/recipes/{recipe_id}/vote")
+def vote_on_board_recipe(
+    request: Request, board_id: int, recipe_id: int,
+    vote: str = Form(""), comment: str = Form(""),
+    _: None = Depends(require_known_user),
+):
+    vote = vote.strip().lower()
+    if vote not in ("yes", "no"):
+        vote = None
+    upsert_board_vote(board_id, recipe_id, current_user_email(request), vote, comment.strip() or None)
+    return RedirectResponse(url=f"/boards/{board_id}", status_code=303)
+
+
+@app.post("/boards/{board_id}/comments")
+def post_board_comment(request: Request, board_id: int, message: str = Form(...), _: None = Depends(require_known_user)):
+    message = message.strip()
+    if not message:
+        raise HTTPException(status_code=400, detail="Comment can't be empty")
+    add_board_comment(board_id, current_user_email(request), message)
+    return RedirectResponse(url=f"/boards/{board_id}", status_code=303)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Boards - My Recipes</title>
+    <link rel="stylesheet" href="/static/style.css?v=8">
+    <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+</head>
+<body>
+    <div class="container">
+        <div class="site-header">
+<div class="site-nav">
+    <a href="/">🍳 Back to recipes</a>
+    <a href="/books">📚 View book library</a>
+    <a href="/authors">📖 Browse by author</a>
+    <a href="/feedback">💬 Feedback</a>
+    {% if is_admin %}
+    <a href="/review">🔍 Review queue</a>
+    <a href="/qc-issues">⚠️ QC issues</a>
+    <a href="/unit-tests">🧪 Unit tests</a>
+    <a href="/feedback/inbox">📥 Feedback inbox</a>
+    {% endif %}
+</div>
+            <h1>📌 Boards</h1>
+            <p class="tagline">Pull recipes together for Christmas, a dinner party, or anything else you're planning -- then argue about them below.</p>
+        </div>
+
+        <div class="recipe-section">
+            <h2>Start a new board</h2>
+            <form method="post" action="/boards">
+                <label>Board name
+                    <input type="text" name="name" required placeholder="e.g. Christmas Ideas">
+                </label>
+                <button type="submit">Create board</button>
+            </form>
+        </div>
+
+        <ul class="board-list">
+            {% for b in boards %}
+            <li>
+                <div class="recipe-info">
+                    <a href="/boards/{{ b['id'] }}">{{ b["name"] }}</a>
+                    <span class="source">
+                        {{ b["recipe_count"] }} recipe{{ "s" if b["recipe_count"] != 1 else "" }}
+                        {% if b["created_by"] %} &middot; started by {{ b["created_by"].split("@")[0]|capitalize }}{% endif %}
+                        {% if b["created_at"] %} &middot; {{ b["created_at"][:10] }}{% endif %}
+                    </span>
+                </div>
+            </li>
+            {% else %}
+            <li class="empty-state">No boards yet -- start one above.</li>
+            {% endfor %}
+        </ul>
+    </div>
+</body>
+</html>

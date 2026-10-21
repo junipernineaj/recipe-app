@@ -522,6 +522,61 @@ is a low-friction way to flag something without needing to be an admin.
   lightweight paper trail, not a ticket system; dismissing a wrong or
   stale item is enough.
 
+## Boards
+
+Added 2026-10-21. A shared "project" for pulling candidate recipes
+together — the motivating case was Christmas: viewing recipes around
+the site and saying "add that one to my Christmas Ideas board", then
+having the whole family narrow the list down together. See
+`documentation/PROJECT_HISTORY.md`, "Boards: a shared place to collect
+and refine recipes for a project" for how the shape of this came about.
+
+- Same trust model as recipe reviews and feedback (see both above):
+  anyone who reaches the site through Cloudflare Access can create a
+  board and add or remove recipes from any board — not admin-gated.
+  Every board-writing route depends on the new `require_known_user()`
+  (alongside the existing `require_admin()`), which 400s with a clear
+  message rather than admin-gating anything, if `current_user_email()`
+  can't identify who's asking.
+- Four new tables in `recipes.db` (see "The two databases" above), each
+  with its own `init_*_table()` called on app startup, same pattern as
+  every other table here:
+  - `boards` — just a name, who started it, and when.
+  - `board_recipes` — which recipes are on which board. A plain
+    many-to-many join table, the same shape as `recipe_relations`,
+    holding nothing but the link itself. This is what makes "a recipe
+    is completely undestructible via any board action" structural
+    rather than just a rule someone has to remember: removing a
+    recipe from a board only ever deletes rows in `board_recipes`/
+    `board_recipe_votes` (see `remove_recipe_from_board()`) — those
+    tables have no way to reach into `recipes` at all.
+  - `board_recipe_votes` — one row per `(board_id, recipe_id,
+    user_email)`, a `vote` (`'yes'`/`'no'`/unset) plus an optional
+    short `comment`, upserted on that same `UNIQUE` constraint the
+    same way `recipe_reviews`/`upsert_review()` already works.
+  - `board_comments` — the freeform message-board thread at the
+    bottom of a board's page. Append-only and attributed, same shape
+    and same no-editing-your-own-comment rule as `site_feedback` (see
+    "Feedback" above). Board-level, not recipe-level, so it's
+    untouched by removing a recipe from the board, or by deleting the
+    recipe itself.
+- `_delete_recipe_row()` (see "The web app" above) was extended to also
+  remove a deleted recipe's `board_recipes`/`board_recipe_votes` rows —
+  never `board_comments`, which belongs to the board as a whole, not
+  any one recipe on it.
+- Routes: `GET`/`POST /boards` (list / create), `GET /boards/{id}` (the
+  board itself), `POST /recipes/{id}/board` (the actual "add to a
+  board" control, on the recipe's own page — either an existing board
+  or a new one typed in on the spot), `DELETE /boards/{id}/recipes/
+  {recipe_id}` (remove, htmx), `POST /boards/{id}/recipes/{recipe_id}/
+  vote`, and `POST /boards/{id}/comments`.
+- Deliberately left out of this first pass: deleting a whole board
+  (only emptying it out recipe by recipe is possible today); any
+  per-board privacy or membership restriction — every board is visible
+  to, and editable by, anyone who reaches the site, same as everything
+  else; and adding a recipe to a board from the board's own page — for
+  now, adding only happens from a recipe's own page.
+
 ## Continuous integration
 
 As of 2026-09-27, `.github/workflows/site-checks.yml` runs
