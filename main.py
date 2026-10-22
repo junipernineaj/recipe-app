@@ -7,7 +7,7 @@ import pymupdf as fitz  # PDF page extraction for generate_source_page_pdf() bel
                          # of scanned cookbook PDFs, see ARCHITECTURE.md, "Per-recipe
                          # extracted page PDFs".
 import html
-import httpx
+import urllib.request
 from fastapi import FastAPI, Request, Form, Response, HTTPException, Depends
 
 from pipeline.recipe_qc import init_qc_table as _init_recipe_qc_table, CHECKS as _QC_CHECKS, run_checks as _run_recipe_qc_checks
@@ -229,16 +229,13 @@ def fetch_page_title(url):
     None on any failure (bad host, timeout, non-HTML, no title) -- the
     recipe still saves with the URL itself as its link text. Only the first
     64 KB is read, and the request times out after 5 seconds."""
+    # Standard library only (urllib, not httpx), so this works on the server's
+    # venv without installing anything new. urlopen follows redirects and
+    # raises HTTPError on 4xx/5xx, which the except below turns into None.
     try:
-        with httpx.stream("GET", url, timeout=5.0, follow_redirects=True,
-                          headers={"User-Agent": "recipe-app/source-title"}) as response:
-            if response.status_code >= 400:
-                return None
-            body = b""
-            for chunk in response.iter_bytes():
-                body += chunk
-                if len(body) >= 65536:
-                    break
+        request = urllib.request.Request(url, headers={"User-Agent": "recipe-app/source-title"})
+        with urllib.request.urlopen(request, timeout=5.0) as response:
+            body = response.read(65536)
     except Exception:
         return None
     match = re.search(rb"<title[^>]*>(.*?)</title>", body, re.IGNORECASE | re.DOTALL)
