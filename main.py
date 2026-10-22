@@ -541,6 +541,36 @@ def _attach_qc_info(conn, recipes: list[dict]) -> list[dict]:
     return recipes
 
 
+# Extra entries in the home page's Books dropdown for recipes that have no
+# book name (AI and internet sources leave source_book NULL). They travel in
+# the same "book" query parameter as a book name, behind a prefix that no
+# book name in the library starts with.
+SOURCE_FILTER_PREFIX = "@type:"
+SOURCE_FILTER_LABELS = {"internet": "From the Internet", "ai": "From AI", "manual": "Manually added"}
+
+
+def _source_filter_clause(book_filter):
+    """WHERE fragment and parameter for a Books dropdown value: a plain book
+    name matches source_book, and '@type:<kind>' matches source_type."""
+    if book_filter.startswith(SOURCE_FILTER_PREFIX):
+        kind = book_filter[len(SOURCE_FILTER_PREFIX):]
+        if kind in RECIPE_SOURCE_TYPES:
+            return " AND source_type = ?", kind
+    return " AND source_book = ?", book_filter
+
+
+def get_source_filter_options():
+    """(value, label) pairs for the source-type entries of the Books dropdown.
+    Only kinds that have at least one approved recipe are listed."""
+    conn = sqlite3.connect("recipes.db")
+    kinds = {row[0] for row in conn.execute(
+        "SELECT DISTINCT source_type FROM recipes WHERE status = 'approved'"
+    )}
+    conn.close()
+    return [(SOURCE_FILTER_PREFIX + kind, SOURCE_FILTER_LABELS[kind])
+            for kind in RECIPE_SOURCE_TYPES if kind in kinds]
+
+
 def get_recipes(search_term: str = "", book_filter: str = ""):
     conn = sqlite3.connect("recipes.db")
     conn.row_factory = sqlite3.Row
@@ -551,8 +581,9 @@ def get_recipes(search_term: str = "", book_filter: str = ""):
         query += " AND title LIKE ?"
         params.append(f"%{search_term}%")
     if book_filter:
-        query += " AND source_book = ?"
-        params.append(book_filter)
+        clause, value = _source_filter_clause(book_filter)
+        query += clause
+        params.append(value)
     cursor.execute(query, params)
     recipes = cursor.fetchall()
     conn.close()
@@ -1198,8 +1229,9 @@ def get_pending_recipe_count(book_filter: str = ""):
     query = "SELECT COUNT(*) FROM recipes WHERE status != 'approved'"
     params = []
     if book_filter:
-        query += " AND source_book = ?"
-        params.append(book_filter)
+        clause, value = _source_filter_clause(book_filter)
+        query += clause
+        params.append(value)
     count = conn.execute(query, params).fetchone()[0]
     conn.close()
     return count
@@ -1397,6 +1429,7 @@ def read_root(request: Request, book: str = ""):
         request=request, name="home.html",
         context={
             "recipes": recipes, "books": books, "book": book,
+            "source_options": get_source_filter_options(),
             "is_admin": is_admin(request),
             "pending_count": get_pending_recipe_count(book_filter=book),
         }

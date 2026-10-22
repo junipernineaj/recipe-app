@@ -45,6 +45,13 @@
                 {% for b in books %}
                 <option value="{{ b }}" {% if b == book %}selected{% endif %}>{{ b }}</option>
                 {% endfor %}
+                {% if source_options %}
+                <optgroup label="By source">
+                    {% for value, label in source_options %}
+                    <option value="{{ value }}" {% if value == book %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                </optgroup>
+                {% endif %}
             </select>
         </div>
 
