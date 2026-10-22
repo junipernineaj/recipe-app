@@ -546,7 +546,7 @@ def _attach_qc_info(conn, recipes: list[dict]) -> list[dict]:
 # the same "book" query parameter as a book name, behind a prefix that no
 # book name in the library starts with.
 SOURCE_FILTER_PREFIX = "@type:"
-SOURCE_FILTER_LABELS = {"internet": "From the Internet", "ai": "From AI", "manual": "Manually added"}
+SOURCE_FILTER_LABELS = {"internet": "From the Internet", "ai": "Claude AI", "manual": "Manually added"}
 
 
 def _source_filter_clause(book_filter):
