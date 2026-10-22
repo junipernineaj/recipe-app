@@ -5,7 +5,7 @@
             <a href="/recipes/{{ recipe['id'] }}">{{ recipe["title"] | titlecase }}</a>
             {% if recipe["source_book"] %}
             <a href="/?book={{ recipe['source_book'] | urlencode }}" class="source" title="Show only recipes from this book">{{ recipe["source_book"] }}</a>
-            {% elif recipe["source_type"] == "internet" and recipe["source_url"] %}
+            {% elif recipe["source_type"] in ("internet", "instagram") and recipe["source_url"] %}
             <a href="{{ recipe['source_url'] }}" target="_blank" rel="noopener" class="source">{{ recipe["source_title"] or recipe["source_url"] }}</a>
             {% elif recipe["source_title"] %}
             <span class="source">{{ recipe["source_title"] }}</span>

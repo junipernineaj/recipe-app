@@ -197,7 +197,7 @@ def init_book_title_author_columns():
 init_book_title_author_columns()
 
 
-RECIPE_SOURCE_TYPES = ("ai", "internet", "manual")
+RECIPE_SOURCE_TYPES = ("internet", "instagram", "ai", "manual")
 
 
 def init_recipe_source_columns():
@@ -546,7 +546,7 @@ def _attach_qc_info(conn, recipes: list[dict]) -> list[dict]:
 # the same "book" query parameter as a book name, behind a prefix that no
 # book name in the library starts with.
 SOURCE_FILTER_PREFIX = "@type:"
-SOURCE_FILTER_LABELS = {"internet": "From the Internet", "ai": "Claude AI", "manual": "Manually added"}
+SOURCE_FILTER_LABELS = {"internet": "From the Internet", "instagram": "From Instagram", "ai": "Claude AI", "manual": "Manually added"}
 
 
 def _source_filter_clause(book_filter):
@@ -575,7 +575,8 @@ def get_recipes(search_term: str = "", book_filter: str = ""):
     conn = sqlite3.connect("recipes.db")
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
-    query = "SELECT id, title, source_book FROM recipes WHERE status = 'approved'"
+    query = ("SELECT id, title, source_book, source_type, source_url, source_title "
+             "FROM recipes WHERE status = 'approved'")
     params = []
     if search_term:
         query += " AND title LIKE ?"
@@ -842,19 +843,25 @@ def create_recipe(title, source_type, source, ingredients, instructions):
       internet -> a typed http(s) URL is stored in source_url, and its page
                   title is looked up for source_title; anything else is kept
                   as a plain label in source_title.
+      instagram -> a typed http(s) URL is stored in source_url as the link.
+                  No title lookup (Instagram pages sit behind a login), so
+                  any plain text typed (e.g. an account name) is the label.
       ai       -> the box is an optional label, kept in source_title.
 
-    source_book stays NULL for ai/internet, so those recipes don't appear in
-    the book filter or /authors."""
+    source_book stays NULL for every type except manual, so non-book recipes
+    don't appear in the book filter or /authors."""
     source = (source or "").strip()
+    is_url = source.lower().startswith(("http://", "https://"))
     source_book = None
     source_url = None
     source_title = None
     if source_type == "manual":
         source_book = source
-    elif source_type == "internet" and source.lower().startswith(("http://", "https://")):
+    elif source_type == "internet" and is_url:
         source_url = source
         source_title = fetch_page_title(source)
+    elif source_type == "instagram" and is_url:
+        source_url = source
     else:
         source_title = source or None
 
