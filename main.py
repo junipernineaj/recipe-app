@@ -6,6 +6,8 @@ import pymupdf as fitz  # PDF page extraction for generate_source_page_pdf() bel
                          # already relies on to verify OCR text against this exact corpus
                          # of scanned cookbook PDFs, see ARCHITECTURE.md, "Per-recipe
                          # extracted page PDFs".
+import html
+import httpx
 from fastapi import FastAPI, Request, Form, Response, HTTPException, Depends
 
 from pipeline.recipe_qc import init_qc_table as _init_recipe_qc_table, CHECKS as _QC_CHECKS, run_checks as _run_recipe_qc_checks
@@ -193,6 +195,58 @@ def init_book_title_author_columns():
 
 
 init_book_title_author_columns()
+
+
+RECIPE_SOURCE_TYPES = ("ai", "internet", "manual")
+
+
+def init_recipe_source_columns():
+    """Adds where-a-recipe-came-from columns to recipes, so 'Add a recipe'
+    doesn't have to squeeze a URL into source_book (the book name, which
+    feeds the book filter and /authors).
+
+    source_type  -- 'ai', 'internet' or 'manual'; NULL on older recipes,
+                    which keep showing source_book as before.
+    source_url   -- the link, when the source is a web page.
+    source_title -- display name: the page's <title> for an internet
+                    source, or a free-text label for ai/internet."""
+    conn = sqlite3.connect("recipes.db")
+    cursor = conn.cursor()
+    cursor.execute("PRAGMA table_info(recipes)")
+    existing_columns = {row[1] for row in cursor.fetchall()}
+    for column in ("source_type", "source_url", "source_title"):
+        if column not in existing_columns:
+            conn.execute(f"ALTER TABLE recipes ADD COLUMN {column} TEXT")
+    conn.commit()
+    conn.close()
+
+
+init_recipe_source_columns()
+
+
+def fetch_page_title(url):
+    """Best-effort lookup of a web page's <title>, for display only. Returns
+    None on any failure (bad host, timeout, non-HTML, no title) -- the
+    recipe still saves with the URL itself as its link text. Only the first
+    64 KB is read, and the request times out after 5 seconds."""
+    try:
+        with httpx.stream("GET", url, timeout=5.0, follow_redirects=True,
+                          headers={"User-Agent": "recipe-app/source-title"}) as response:
+            if response.status_code >= 400:
+                return None
+            body = b""
+            for chunk in response.iter_bytes():
+                body += chunk
+                if len(body) >= 65536:
+                    break
+    except Exception:
+        return None
+    match = re.search(rb"<title[^>]*>(.*?)</title>", body, re.IGNORECASE | re.DOTALL)
+    if not match:
+        return None
+    title = html.unescape(match.group(1).decode("utf-8", errors="replace"))
+    title = " ".join(title.split())
+    return title or None
 
 
 def init_recipe_qc_table():
@@ -516,7 +570,7 @@ def get_distinct_source_books():
     conn = sqlite3.connect("recipes.db")
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT DISTINCT source_book FROM recipes WHERE status = 'approved' ORDER BY source_book COLLATE NOCASE"
+        "SELECT DISTINCT source_book FROM recipes WHERE status = 'approved' AND source_book IS NOT NULL ORDER BY source_book COLLATE NOCASE"
     )
     books = [row[0] for row in cursor.fetchall()]
     conn.close()
@@ -569,7 +623,7 @@ def get_books_with_authors():
     cursor = conn.cursor()
     cursor.execute("""
         SELECT source_book, MIN(source_path), COUNT(*)
-        FROM recipes WHERE status = 'approved' GROUP BY source_book
+        FROM recipes WHERE status = 'approved' AND source_book IS NOT NULL GROUP BY source_book
     """)
     rows = cursor.fetchall()
     conn.close()
@@ -752,12 +806,36 @@ def get_qc_results_for_recipe(recipe_id: int):
     return [by_name[name] for name, _, _ in _QC_CHECKS if name in by_name]
 
 
-def create_recipe(title, source_book, ingredients, instructions):
+def create_recipe(title, source_type, source, ingredients, instructions):
+    """Inserts a manually-added recipe. source_type is one of
+    RECIPE_SOURCE_TYPES; source is whatever was typed in the source box.
+
+      manual   -> the box is the book name, stored in source_book (as before).
+      internet -> a typed http(s) URL is stored in source_url, and its page
+                  title is looked up for source_title; anything else is kept
+                  as a plain label in source_title.
+      ai       -> the box is an optional label, kept in source_title.
+
+    source_book stays NULL for ai/internet, so those recipes don't appear in
+    the book filter or /authors."""
+    source = (source or "").strip()
+    source_book = None
+    source_url = None
+    source_title = None
+    if source_type == "manual":
+        source_book = source
+    elif source_type == "internet" and source.lower().startswith(("http://", "https://")):
+        source_url = source
+        source_title = fetch_page_title(source)
+    else:
+        source_title = source or None
+
     conn = sqlite3.connect("recipes.db")
     cursor = conn.cursor()
     cursor.execute(
-        "INSERT INTO recipes (title, source_book, ingredients, instructions) VALUES (?, ?, ?, ?)",
-        (title, source_book, ingredients, instructions)
+        "INSERT INTO recipes (title, source_type, source_book, source_url, source_title, ingredients, instructions) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (title, source_type, source_book, source_url, source_title, ingredients, instructions)
     )
     conn.commit()
     conn.close()
@@ -1585,12 +1663,15 @@ def new_recipe_form(request: Request, _: None = Depends(require_admin)):
 @app.post("/recipes")
 def add_recipe(
     title: str = Form(...),
-    source_book: str = Form(""),
+    source_type: str = Form("manual"),
+    source: str = Form(""),
     ingredients: str = Form(""),
     instructions: str = Form(""),
     _: None = Depends(require_admin),
 ):
-    create_recipe(title, source_book, ingredients, instructions)
+    if source_type not in RECIPE_SOURCE_TYPES:
+        raise HTTPException(status_code=400, detail="source_type must be ai, internet or manual")
+    create_recipe(title, source_type, source, ingredients, instructions)
     return RedirectResponse(url="/", status_code=303)
 
 

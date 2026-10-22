@@ -12,9 +12,38 @@
             <label>Title
                 <input type="text" name="title" required>
             </label>
-            <label>Source book
-                <input type="text" name="source_book">
+            <label>Where did this recipe come from?
+                <select name="source_type" id="source_type">
+                    <option value="manual" selected>Manually entered</option>
+                    <option value="ai">From AI</option>
+                    <option value="internet">From the Internet</option>
+                </select>
             </label>
+            <label>Source
+                <input type="text" name="source" id="source" placeholder="Book name, or a web link">
+                <span class="field-hint" id="source-hint">The book this recipe came from. Can be left blank.</span>
+            </label>
+            <script>
+                (function () {
+                    var type = document.getElementById("source_type");
+                    var input = document.getElementById("source");
+                    var hint = document.getElementById("source-hint");
+                    function update() {
+                        if (type.value === "internet") {
+                            input.placeholder = "https://… (the page title will be looked up)";
+                            hint.textContent = "Paste the web address. Can be left blank.";
+                        } else if (type.value === "ai") {
+                            input.placeholder = "Optional note, e.g. the model or prompt used";
+                            hint.textContent = "Optional. Can be left blank.";
+                        } else {
+                            input.placeholder = "Book name";
+                            hint.textContent = "The book this recipe came from. Can be left blank.";
+                        }
+                    }
+                    type.addEventListener("change", update);
+                    update();
+                })();
+            </script>
             <label>Ingredients (one per line)
                 <textarea name="ingredients" rows="6"></textarea>
             </label>

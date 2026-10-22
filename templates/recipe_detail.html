@@ -10,7 +10,7 @@
         <a class="back-link" href="/">&larr; Back to all recipes</a>
         <div class="recipe-header">
             <h1>{{ recipe["title"] | titlecase }}</h1>
-            <p class="source">From: {{ recipe["source_book"] }}{% if recipe["engine"] %} &middot; extracted by {{ recipe["engine"] }}{% endif %}{% if recipe["extracted_at"] %} &middot; {{ recipe["extracted_at"][:16] }} UTC{% endif %}</p>
+            <p class="source">From: {% if recipe["source_type"] == "internet" %}{% if recipe["source_url"] %}<a href="{{ recipe['source_url'] }}" target="_blank" rel="noopener">{{ recipe["source_title"] or recipe["source_url"] }}</a>{% elif recipe["source_title"] %}{{ recipe["source_title"] }}{% else %}the Internet{% endif %}{% elif recipe["source_type"] == "ai" %}AI{% if recipe["source_title"] %} ({{ recipe["source_title"] }}){% endif %}{% else %}{{ recipe["source_book"] }}{% endif %}{% if recipe["engine"] %} &middot; extracted by {{ recipe["engine"] }}{% endif %}{% if recipe["extracted_at"] %} &middot; {{ recipe["extracted_at"][:16] }} UTC{% endif %}</p>
             {% if (recipe["source_path"] and has_source_pdf) or is_admin %}
             <div class="actions-row">
                 {% if recipe["source_path"] and has_source_pdf %}
